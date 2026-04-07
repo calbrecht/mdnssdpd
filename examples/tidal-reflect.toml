@@ -1,0 +1,57 @@
+# Tidal Connect: Reflect mDNS between VLANs "control" and "stream"
+#
+# Replace "eth0" / "eth1" with your actual interface names.
+# Run: dnssd-powertools --config examples/tidal-reflect.toml
+
+# Route 1: Forward queries from control → stream
+# (App discovers streamer)
+[[route]]
+name = "control-to-stream-queries"
+input = ["eth0"]
+output = [
+    { type = "reflect", interfaces = ["eth1"] },
+    { type = "log" },
+]
+
+[route.filter]
+[[route.filter.rule]]
+[[route.filter.rule.condition]]
+path = "message.message_type"
+op = "eq"
+value = "query"
+
+# Route 2: Forward responses from stream → control
+# Strip link-local IPv6 addresses, clamp TTL to 60s
+[[route]]
+name = "stream-to-control-responses"
+input = ["eth1"]
+output = [
+    { type = "reflect", interfaces = ["eth0"] },
+    { type = "log" },
+]
+
+[route.filter]
+[[route.filter.rule]]
+[[route.filter.rule.condition]]
+path = "message.message_type"
+op = "eq"
+value = "response"
+
+# Remove link-local IPv6 AAAA records from answers and additionals
+[[route.transform]]
+type = "remove_records"
+section = "answers"
+record_type = "AAAA"
+match_rdata = "fe80"
+
+[[route.transform]]
+type = "remove_records"
+section = "additionals"
+record_type = "AAAA"
+match_rdata = "fe80"
+
+# Clamp TTL to 60s
+[[route.transform]]
+type = "set_ttl"
+section = "all"
+value = 60
