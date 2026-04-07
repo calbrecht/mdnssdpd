@@ -1,0 +1,6 @@
+/target
+/result
+.cargo
+.nixpkgs
+*.log
+*.tmp
