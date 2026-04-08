@@ -96,4 +96,63 @@ mod tests {
         assert_eq!(msg.answers()[0].ttl(), 0); // preserved
         assert_eq!(msg.answers()[1].ttl(), 60);
     }
+
+    #[test]
+    fn test_set_ttl_authorities() {
+        let mut msg = Message::new();
+        msg.add_name_server(make_record("ns.local.", 300));
+        msg.add_answer(make_record("a.local.", 300));
+
+        SetTtl::new("authorities", 10, None).unwrap().apply(&mut msg).unwrap();
+
+        assert_eq!(msg.name_servers()[0].ttl(), 10);
+        assert_eq!(msg.answers()[0].ttl(), 300); // untouched
+    }
+
+    #[test]
+    fn test_set_ttl_additionals() {
+        let mut msg = Message::new();
+        msg.add_additional(make_record("add.local.", 300));
+
+        SetTtl::new("additionals", 5, None).unwrap().apply(&mut msg).unwrap();
+
+        assert_eq!(msg.additionals()[0].ttl(), 5);
+    }
+
+    #[test]
+    fn test_set_ttl_all_sections() {
+        let mut msg = Message::new();
+        msg.add_answer(make_record("a.local.", 300));
+        msg.add_name_server(make_record("ns.local.", 300));
+        msg.add_additional(make_record("add.local.", 300));
+
+        SetTtl::new("all", 42, None).unwrap().apply(&mut msg).unwrap();
+
+        assert_eq!(msg.answers()[0].ttl(), 42);
+        assert_eq!(msg.name_servers()[0].ttl(), 42);
+        assert_eq!(msg.additionals()[0].ttl(), 42);
+    }
+
+    #[test]
+    fn test_set_ttl_with_record_type_filter() {
+        use hickory_proto::rr::rdata::AAAA;
+        let mut msg = Message::new();
+        msg.add_answer(make_record("a.local.", 300)); // A record
+        msg.add_answer(Record::from_rdata(
+            Name::from_str("b.local.").unwrap(), 300,
+            RData::AAAA(AAAA("::1".parse().unwrap())),
+        ));
+
+        SetTtl::new("answers", 60, Some("A")).unwrap().apply(&mut msg).unwrap();
+
+        assert_eq!(msg.answers()[0].ttl(), 60);  // A: changed
+        assert_eq!(msg.answers()[1].ttl(), 300); // AAAA: untouched
+    }
+
+    #[test]
+    fn test_set_ttl_empty_message() {
+        let mut msg = Message::new();
+        // Should not panic
+        SetTtl::new("all", 60, None).unwrap().apply(&mut msg).unwrap();
+    }
 }

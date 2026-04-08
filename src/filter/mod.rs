@@ -542,4 +542,327 @@ mod tests {
         // Response matches cfg1, but source matches cfg2's hide -> blocked
         assert!(!engine.should_print(&test_entry()));
     }
+
+    // --- jq truthiness ---
+
+    #[test]
+    fn test_jq_returns_null_is_falsy() {
+        let engine = FilterEngine::build(
+            vec![], &[], &["null".into()], false,
+        ).unwrap().unwrap();
+        assert!(!engine.should_print(&test_entry()));
+    }
+
+    #[test]
+    fn test_jq_returns_false_is_falsy() {
+        let engine = FilterEngine::build(
+            vec![], &[], &["false".into()], false,
+        ).unwrap().unwrap();
+        assert!(!engine.should_print(&test_entry()));
+    }
+
+    #[test]
+    fn test_jq_returns_zero_is_truthy() {
+        let engine = FilterEngine::build(
+            vec![], &[], &["0".into()], false,
+        ).unwrap().unwrap();
+        assert!(engine.should_print(&test_entry()));
+    }
+
+    #[test]
+    fn test_jq_returns_empty_string_is_truthy() {
+        let engine = FilterEngine::build(
+            vec![], &[], &[r#""""#.into()], false,
+        ).unwrap().unwrap();
+        assert!(engine.should_print(&test_entry()));
+    }
+
+    #[test]
+    fn test_jq_syntax_error() {
+        let result = FilterEngine::build(
+            vec![], &[], &["invalid[[[".into()], false,
+        );
+        assert!(result.is_err());
+    }
+
+    // --- Mode combinations ---
+
+    #[test]
+    fn test_mode_all_one_fails() {
+        let cfg = FilterConfig {
+            mode: "all".into(),
+            action: "show".into(),
+            rule: vec![
+                Rule {
+                    name: None, negate: false,
+                    condition: vec![Condition {
+                        path: "message.message_type".into(),
+                        op: Op::Eq, value: json!("response"),
+                    }],
+                },
+                Rule {
+                    name: None, negate: false,
+                    condition: vec![Condition {
+                        path: "message.message_type".into(),
+                        op: Op::Eq, value: json!("query"), // won't match
+                    }],
+                },
+            ],
+            chain: vec![],
+        };
+        let engine = FilterEngine::build(vec![cfg], &[], &[], false).unwrap().unwrap();
+        assert!(!engine.should_print(&test_entry()));
+    }
+
+    #[test]
+    fn test_mode_all_both_pass() {
+        let cfg = FilterConfig {
+            mode: "all".into(),
+            action: "show".into(),
+            rule: vec![
+                Rule {
+                    name: None, negate: false,
+                    condition: vec![Condition {
+                        path: "message.message_type".into(),
+                        op: Op::Eq, value: json!("response"),
+                    }],
+                },
+                Rule {
+                    name: None, negate: false,
+                    condition: vec![Condition {
+                        path: "message.authoritative".into(),
+                        op: Op::Eq, value: json!(true),
+                    }],
+                },
+            ],
+            chain: vec![],
+        };
+        let engine = FilterEngine::build(vec![cfg], &[], &[], false).unwrap().unwrap();
+        assert!(engine.should_print(&test_entry()));
+    }
+
+    #[test]
+    fn test_mode_any_all_fail() {
+        let cfg = FilterConfig {
+            mode: "any".into(),
+            action: "show".into(),
+            rule: vec![
+                Rule {
+                    name: None, negate: false,
+                    condition: vec![Condition {
+                        path: "message.message_type".into(),
+                        op: Op::Eq, value: json!("query"),
+                    }],
+                },
+                Rule {
+                    name: None, negate: false,
+                    condition: vec![Condition {
+                        path: "interface".into(),
+                        op: Op::Eq, value: json!("nonexistent"),
+                    }],
+                },
+            ],
+            chain: vec![],
+        };
+        let engine = FilterEngine::build(vec![cfg], &[], &[], false).unwrap().unwrap();
+        assert!(!engine.should_print(&test_entry()));
+    }
+
+    // --- Rule edge cases ---
+
+    #[test]
+    fn test_rule_with_no_conditions_matches_all() {
+        let cfg = FilterConfig {
+            mode: "any".into(),
+            action: "show".into(),
+            rule: vec![Rule { name: None, negate: false, condition: vec![] }],
+            chain: vec![],
+        };
+        let engine = FilterEngine::build(vec![cfg], &[], &[], false).unwrap().unwrap();
+        assert!(engine.should_print(&test_entry()));
+    }
+
+    #[test]
+    fn test_negate_with_matching_conditions() {
+        let cfg = FilterConfig {
+            mode: "any".into(),
+            action: "show".into(),
+            rule: vec![Rule {
+                name: None, negate: true,
+                condition: vec![Condition {
+                    path: "message.message_type".into(),
+                    op: Op::Eq, value: json!("response"),
+                }],
+            }],
+            chain: vec![],
+        };
+        let engine = FilterEngine::build(vec![cfg], &[], &[], false).unwrap().unwrap();
+        // Conditions match, but negate inverts → rule doesn't match → not printed
+        assert!(!engine.should_print(&test_entry()));
+    }
+
+    // --- Exists on missing field ---
+
+    #[test]
+    fn test_exists_true_on_missing_field() {
+        let engine = FilterEngine::build(
+            vec![], &["nonexistent.field exists true".into()], &[], false,
+        ).unwrap().unwrap();
+        assert!(!engine.should_print(&test_entry()));
+    }
+
+    #[test]
+    fn test_exists_false_on_missing_field() {
+        let engine = FilterEngine::build(
+            vec![], &["nonexistent.field exists false".into()], &[], false,
+        ).unwrap().unwrap();
+        assert!(engine.should_print(&test_entry()));
+    }
+
+    // --- Mixed inline + jq ---
+
+    #[test]
+    fn test_inline_passes_jq_fails() {
+        let engine = FilterEngine::build(
+            vec![],
+            &["message.message_type eq response".into()],
+            &["false".into()],
+            false,
+        ).unwrap().unwrap();
+        assert!(!engine.should_print(&test_entry()));
+    }
+
+    // --- Empty chain link (no rules = pass-through) ---
+
+    #[test]
+    fn test_empty_config_is_pass_through() {
+        let cfg = FilterConfig {
+            mode: "any".into(),
+            action: "show".into(),
+            rule: vec![],
+            chain: vec![],
+        };
+        // Config with no rules → chain link passes everything
+        let engine = FilterEngine::build(vec![cfg], &[], &[], false).unwrap().unwrap();
+        assert!(engine.should_print(&test_entry()));
+    }
+
+    // --- Hide action on single config ---
+
+    #[test]
+    fn test_hide_matching() {
+        let cfg = FilterConfig {
+            mode: "any".into(),
+            action: "hide".into(),
+            rule: vec![Rule {
+                name: None, negate: false,
+                condition: vec![Condition {
+                    path: "message.message_type".into(),
+                    op: Op::Eq, value: json!("response"),
+                }],
+            }],
+            chain: vec![],
+        };
+        let engine = FilterEngine::build(vec![cfg], &[], &[], false).unwrap().unwrap();
+        // Matches → hide → should NOT print
+        assert!(!engine.should_print(&test_entry()));
+    }
+
+    #[test]
+    fn test_hide_non_matching() {
+        let cfg = FilterConfig {
+            mode: "any".into(),
+            action: "hide".into(),
+            rule: vec![Rule {
+                name: None, negate: false,
+                condition: vec![Condition {
+                    path: "message.message_type".into(),
+                    op: Op::Eq, value: json!("query"),
+                }],
+            }],
+            chain: vec![],
+        };
+        let engine = FilterEngine::build(vec![cfg], &[], &[], false).unwrap().unwrap();
+        // Doesn't match → not hidden → SHOULD print
+        assert!(engine.should_print(&test_entry()));
+    }
+
+    // --- load_configs with temp files ---
+
+    #[test]
+    fn test_load_configs_single_file() {
+        let dir = std::env::temp_dir().join("dnssd-filter-test-1");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("filter.toml");
+        std::fs::write(&path, r#"
+            mode = "any"
+            [[rule]]
+            [[rule.condition]]
+            path = "source"
+            op = "eq"
+            value = "test"
+        "#).unwrap();
+
+        let configs = load_configs(&[path.to_str().unwrap().to_string()]).unwrap();
+        assert_eq!(configs.len(), 1);
+        assert_eq!(configs[0].rule.len(), 1);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_load_configs_with_chain() {
+        let dir = std::env::temp_dir().join("dnssd-filter-test-2");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let child = dir.join("child.toml");
+        std::fs::write(&child, r#"
+            [[rule]]
+            [[rule.condition]]
+            path = "interface"
+            op = "eq"
+            value = "eth0"
+        "#).unwrap();
+
+        let parent = dir.join("parent.toml");
+        std::fs::write(&parent, format!(r#"
+            chain = ["{}"]
+            [[rule]]
+            [[rule.condition]]
+            path = "source"
+            op = "eq"
+            value = "x"
+        "#, child.to_str().unwrap())).unwrap();
+
+        let configs = load_configs(&[parent.to_str().unwrap().to_string()]).unwrap();
+        assert_eq!(configs.len(), 2); // parent + child
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_load_configs_circular_chain() {
+        let dir = std::env::temp_dir().join("dnssd-filter-test-3");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let file_a = dir.join("a.toml");
+        let file_b = dir.join("b.toml");
+
+        std::fs::write(&file_a, format!(r#"chain = ["{}"]"#, file_b.to_str().unwrap())).unwrap();
+        std::fs::write(&file_b, format!(r#"chain = ["{}"]"#, file_a.to_str().unwrap())).unwrap();
+
+        let result = load_configs(&[file_a.to_str().unwrap().to_string()]);
+        assert!(result.is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_load_configs_nonexistent_file() {
+        let result = load_configs(&["/nonexistent/path.toml".to_string()]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_configs_empty_list() {
+        let configs = load_configs(&[]).unwrap();
+        assert!(configs.is_empty());
+    }
 }

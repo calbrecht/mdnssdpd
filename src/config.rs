@@ -132,3 +132,164 @@ impl Config {
         result
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_all_input_interfaces_dedup() {
+        let config = Config {
+            route: vec![
+                RouteConfig {
+                    name: "r1".into(),
+                    input: vec!["eth0".into(), "eth1".into()],
+                    filter: None,
+                    transform: vec![],
+                    output: vec![OutputConfig::Log { format: "json".into() }],
+                },
+                RouteConfig {
+                    name: "r2".into(),
+                    input: vec!["eth1".into(), "eth2".into()],
+                    filter: None,
+                    transform: vec![],
+                    output: vec![OutputConfig::Log { format: "json".into() }],
+                },
+            ],
+        };
+        let ifaces = config.all_input_interfaces();
+        assert_eq!(ifaces, vec!["eth0", "eth1", "eth2"]);
+    }
+
+    #[test]
+    fn test_all_input_interfaces_empty() {
+        let config = Config { route: vec![] };
+        assert!(config.all_input_interfaces().is_empty());
+    }
+
+    #[test]
+    fn test_deserialize_minimal_config() {
+        let toml_str = r#"
+            [[route]]
+            name = "test"
+            input = ["eth0"]
+            output = [{ type = "log" }]
+        "#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.route.len(), 1);
+        assert_eq!(config.route[0].name, "test");
+        assert_eq!(config.route[0].input, vec!["eth0"]);
+        assert!(config.route[0].filter.is_none());
+        assert!(config.route[0].transform.is_empty());
+    }
+
+    #[test]
+    fn test_deserialize_defaults() {
+        let toml_str = r#"
+            [[route]]
+            name = "test"
+            input = ["eth0"]
+            output = [{ type = "log" }]
+
+            [route.filter]
+            [[route.filter.rule]]
+            [[route.filter.rule.condition]]
+            path = "source"
+            op = "eq"
+            value = "x"
+        "#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        let filter = config.route[0].filter.as_ref().unwrap();
+        assert_eq!(filter.mode, "any");
+        assert_eq!(filter.action, "show");
+        assert!(filter.jq.is_empty());
+        assert!(filter.chain.is_empty());
+    }
+
+    #[test]
+    fn test_deserialize_transform_remove_records() {
+        let toml_str = r#"
+            [[route]]
+            name = "test"
+            input = ["eth0"]
+            output = [{ type = "log" }]
+
+            [[route.transform]]
+            type = "remove_records"
+            record_type = "AAAA"
+            match_rdata = "^fe80"
+        "#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.route[0].transform.len(), 1);
+        match &config.route[0].transform[0] {
+            TransformConfig::RemoveRecords { section, record_type, match_rdata, .. } => {
+                assert_eq!(section, "all"); // default
+                assert_eq!(record_type.as_deref(), Some("AAAA"));
+                assert_eq!(match_rdata.as_deref(), Some("^fe80"));
+            }
+            _ => panic!("Expected RemoveRecords"),
+        }
+    }
+
+    #[test]
+    fn test_deserialize_transform_set_ttl() {
+        let toml_str = r#"
+            [[route]]
+            name = "test"
+            input = ["eth0"]
+            output = [{ type = "log" }]
+
+            [[route.transform]]
+            type = "set_ttl"
+            section = "answers"
+            value = 60
+        "#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        match &config.route[0].transform[0] {
+            TransformConfig::SetTtl { section, value, record_type } => {
+                assert_eq!(section, "answers");
+                assert_eq!(*value, 60);
+                assert!(record_type.is_none());
+            }
+            _ => panic!("Expected SetTtl"),
+        }
+    }
+
+    #[test]
+    fn test_deserialize_output_reflect() {
+        let toml_str = r#"
+            [[route]]
+            name = "test"
+            input = ["eth0"]
+            output = [{ type = "reflect", interfaces = ["eth1", "eth2"] }]
+        "#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        match &config.route[0].output[0] {
+            OutputConfig::Reflect { interfaces } => {
+                assert_eq!(interfaces, &vec!["eth1", "eth2"]);
+            }
+            _ => panic!("Expected Reflect"),
+        }
+    }
+
+    #[test]
+    fn test_load_from_file() {
+        let dir = std::env::temp_dir().join("dnssd-test-config");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.toml");
+        std::fs::write(&path, r#"
+            [[route]]
+            name = "test"
+            input = ["eth0"]
+            output = [{ type = "log" }]
+        "#).unwrap();
+        let config = Config::load(path.to_str().unwrap()).unwrap();
+        assert_eq!(config.route[0].name, "test");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_load_nonexistent_file() {
+        assert!(Config::load("/nonexistent/path.toml").is_err());
+    }
+}

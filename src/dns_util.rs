@@ -335,5 +335,194 @@ mod tests {
         assert_eq!(entry.message.questions[1].class, "IN");
         assert_eq!(entry.message.questions[1].prefer_unicast, None);
     }
+
+    #[test]
+    fn test_empty_message() {
+        let msg = Message::new();
+        let entry = message_to_json(&msg, "eth0:v4", "10.0.0.1:5353", 12, "2024-01-01T00:00:00Z");
+        assert_eq!(entry.message.question_count, 0);
+        assert_eq!(entry.message.answer_count, 0);
+        assert!(entry.message.questions.is_empty());
+        assert!(entry.message.answers.is_empty());
+    }
+
+    #[test]
+    fn test_header_flags() {
+        let mut msg = Message::new();
+        msg.set_message_type(MessageType::Response);
+        msg.set_authoritative(true);
+        msg.set_truncated(true);
+        msg.set_recursion_desired(true);
+        msg.set_recursion_available(true);
+        msg.set_id(42);
+
+        let entry = message_to_json(&msg, "eth0:v4", "10.0.0.1:5353", 100, "2024-01-01T00:00:00Z");
+        assert_eq!(entry.message.id, 42);
+        assert_eq!(entry.message.message_type, "response");
+        assert!(entry.message.authoritative);
+        assert!(entry.message.truncated);
+        assert!(entry.message.recursion_desired);
+        assert!(entry.message.recursion_available);
+    }
+
+    #[test]
+    fn test_rdata_a() {
+        let record = Record::from_rdata(
+            Name::from_str("host.local.").unwrap(), 120,
+            RData::A(A(Ipv4Addr::new(192, 168, 1, 1))),
+        );
+        let info = super::record_to_info(&record);
+        assert_eq!(info.rdata, "192.168.1.1");
+        assert!(info.rdata_detail.is_none());
+    }
+
+    #[test]
+    fn test_rdata_aaaa() {
+        let record = Record::from_rdata(
+            Name::from_str("host.local.").unwrap(), 120,
+            RData::AAAA(AAAA("2001:db8::1".parse().unwrap())),
+        );
+        let info = super::record_to_info(&record);
+        assert_eq!(info.rdata, "2001:db8::1");
+    }
+
+    #[test]
+    fn test_rdata_ptr() {
+        let record = Record::from_rdata(
+            Name::from_str("_tcp.local.").unwrap(), 4500,
+            RData::PTR(hickory_proto::rr::rdata::PTR(
+                Name::from_str("myhost._tcp.local.").unwrap(),
+            )),
+        );
+        let info = super::record_to_info(&record);
+        assert!(info.rdata.contains("myhost"));
+    }
+
+    #[test]
+    fn test_rdata_srv_detail() {
+        let record = Record::from_rdata(
+            Name::from_str("svc._tcp.local.").unwrap(), 120,
+            RData::SRV(SRV::new(10, 20, 8080, Name::from_str("host.local.").unwrap())),
+        );
+        let info = super::record_to_info(&record);
+        assert!(info.rdata_detail.is_some());
+        let detail = info.rdata_detail.unwrap();
+        assert_eq!(detail["port"], 8080);
+        assert_eq!(detail["priority"], 10);
+        assert_eq!(detail["weight"], 20);
+    }
+
+    #[test]
+    fn test_rdata_txt_multiple() {
+        use hickory_proto::rr::rdata::TXT;
+        let record = Record::from_rdata(
+            Name::from_str("svc.local.").unwrap(), 120,
+            RData::TXT(TXT::new(vec!["key1=val1".to_string(), "key2=val2".to_string()])),
+        );
+        let info = super::record_to_info(&record);
+        assert!(info.rdata.contains("key1=val1"));
+        assert!(info.rdata.contains("key2=val2"));
+        let detail = info.rdata_detail.unwrap();
+        let entries = detail["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 2);
+    }
+
+    #[test]
+    fn test_rdata_mx_detail() {
+        use hickory_proto::rr::rdata::MX;
+        let record = Record::from_rdata(
+            Name::from_str("example.local.").unwrap(), 120,
+            RData::MX(MX::new(10, Name::from_str("mail.local.").unwrap())),
+        );
+        let info = super::record_to_info(&record);
+        assert!(info.rdata_detail.is_some());
+        let detail = info.rdata_detail.unwrap();
+        assert_eq!(detail["preference"], 10);
+    }
+
+    #[test]
+    fn test_message_with_authorities_and_additionals() {
+        let mut msg = Message::new();
+        msg.set_message_type(MessageType::Response);
+        msg.add_answer(Record::from_rdata(
+            Name::from_str("a.local.").unwrap(), 120,
+            RData::A(A(Ipv4Addr::new(10, 0, 0, 1))),
+        ));
+        msg.add_name_server(Record::from_rdata(
+            Name::from_str("ns.local.").unwrap(), 300,
+            RData::A(A(Ipv4Addr::new(10, 0, 0, 2))),
+        ));
+        msg.add_additional(Record::from_rdata(
+            Name::from_str("add.local.").unwrap(), 60,
+            RData::A(A(Ipv4Addr::new(10, 0, 0, 3))),
+        ));
+
+        let entry = message_to_json(&msg, "eth0:v4", "10.0.0.1:5353", 200, "2024-01-01T00:00:00Z");
+        assert_eq!(entry.message.answers.len(), 1);
+        assert_eq!(entry.message.authorities.len(), 1);
+        assert_eq!(entry.message.additionals.len(), 1);
+        assert_eq!(entry.message.authorities[0].name, "ns.local.");
+        assert_eq!(entry.message.additionals[0].name, "add.local.");
+    }
+
+    #[test]
+    fn test_metadata_fields() {
+        let msg = Message::new();
+        let entry = message_to_json(&msg, "wlan0:v6", "fe80::1:5353", 42, "2024-06-15T12:00:00Z");
+        assert_eq!(entry.interface, "wlan0:v6");
+        assert_eq!(entry.source, "fe80::1:5353");
+        assert_eq!(entry.packet_size, 42);
+        assert_eq!(entry.timestamp, "2024-06-15T12:00:00Z");
+    }
+
+    #[test]
+    fn test_rdata_cname() {
+        use hickory_proto::rr::rdata::CNAME;
+        let record = Record::from_rdata(
+            Name::from_str("alias.local.").unwrap(), 120,
+            RData::CNAME(CNAME(Name::from_str("real.local.").unwrap())),
+        );
+        let info = super::record_to_info(&record);
+        assert!(info.rdata.contains("real.local"));
+        assert!(info.rdata_detail.is_none());
+    }
+
+    #[test]
+    fn test_rdata_ns() {
+        use hickory_proto::rr::rdata::NS;
+        let record = Record::from_rdata(
+            Name::from_str("example.local.").unwrap(), 120,
+            RData::NS(NS(Name::from_str("ns1.local.").unwrap())),
+        );
+        let info = super::record_to_info(&record);
+        assert!(info.rdata.contains("ns1.local"));
+        assert!(info.rdata_detail.is_none());
+    }
+
+    #[test]
+    fn test_rdata_opt() {
+        use hickory_proto::rr::rdata::OPT;
+        let record = Record::from_rdata(
+            Name::from_str(".").unwrap(), 0,
+            RData::OPT(OPT::default()),
+        );
+        let info = super::record_to_info(&record);
+        assert_eq!(info.rdata, "OPT");
+        assert!(info.rdata_detail.is_some());
+    }
+
+    #[test]
+    fn test_rdata_fallback_unknown() {
+        use hickory_proto::rr::rdata::NULL;
+        // NULL is a valid RData variant that hits the `other` fallback
+        let record = Record::from_rdata(
+            Name::from_str("test.local.").unwrap(), 120,
+            RData::NULL(NULL::with(vec![1, 2, 3])),
+        );
+        let info = super::record_to_info(&record);
+        // Should use Debug format as fallback
+        assert!(!info.rdata.is_empty());
+        assert!(info.rdata_detail.is_none());
+    }
 }
 
