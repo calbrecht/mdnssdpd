@@ -76,7 +76,9 @@ impl RecordMatcher {
             }
         }
         if let Some(re) = &self.rdata_regex {
-            let rdata_str = format!("{:?}", record.data());
+            // Use Display format for human-readable rdata (e.g. "fe80::1"),
+            // not Debug which wraps in type constructors (e.g. "AAAA(AAAA(fe80::1))")
+            let rdata_str = format!("{}", record.data());
             if !re.is_match(&rdata_str) {
                 return false;
             }
@@ -197,4 +199,300 @@ pub fn build_chain(configs: &[TransformConfig]) -> Result<TransformChain> {
     }
 
     Ok(TransformChain::new(transforms))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hickory_proto::op::Message;
+    use hickory_proto::rr::rdata::{A, AAAA};
+    use hickory_proto::rr::{Name, RData, Record};
+    use std::net::Ipv4Addr;
+    use std::str::FromStr;
+
+    fn make_record(name: &str) -> Record {
+        Record::from_rdata(
+            Name::from_str(name).unwrap(),
+            120,
+            RData::A(A(Ipv4Addr::new(10, 0, 0, 1))),
+        )
+    }
+
+    fn make_aaaa_record(name: &str) -> Record {
+        Record::from_rdata(
+            Name::from_str(name).unwrap(),
+            120,
+            RData::AAAA(AAAA("fe80::1".parse().unwrap())),
+        )
+    }
+
+    // --- Section::parse ---
+
+    #[test]
+    fn test_section_parse_all_variants() {
+        assert!(matches!(Section::parse("answers"), Section::Answers));
+        assert!(matches!(Section::parse("authorities"), Section::Authorities));
+        assert!(matches!(Section::parse("additionals"), Section::Additionals));
+        assert!(matches!(Section::parse("all"), Section::All));
+        assert!(matches!(Section::parse("unknown"), Section::All));
+        assert!(matches!(Section::parse(""), Section::All));
+    }
+
+    // --- RecordMatcher ---
+
+    #[test]
+    fn test_matcher_no_filters() {
+        let m = RecordMatcher::new(None, None, None).unwrap();
+        assert!(m.matches(&make_record("test.local.")));
+    }
+
+    #[test]
+    fn test_matcher_record_type_only() {
+        let m = RecordMatcher::new(Some("A"), None, None).unwrap();
+        assert!(m.matches(&make_record("test.local.")));
+        assert!(!m.matches(&make_aaaa_record("test.local.")));
+    }
+
+    #[test]
+    fn test_matcher_name_regex_only() {
+        let m = RecordMatcher::new(None, Some("test"), None).unwrap();
+        assert!(m.matches(&make_record("test.local.")));
+        assert!(!m.matches(&make_record("other.local.")));
+    }
+
+    #[test]
+    fn test_matcher_rdata_regex_only() {
+        let m = RecordMatcher::new(None, None, Some("fe80")).unwrap();
+        assert!(m.matches(&make_aaaa_record("x.local.")));
+        assert!(!m.matches(&make_record("x.local."))); // A record rdata is 10.0.0.1
+    }
+
+    #[test]
+    fn test_matcher_all_filters_combined() {
+        let m = RecordMatcher::new(Some("AAAA"), Some("x\\.local"), Some("fe80")).unwrap();
+        assert!(m.matches(&make_aaaa_record("x.local.")));
+        // Wrong type
+        assert!(!m.matches(&make_record("x.local.")));
+    }
+
+    #[test]
+    fn test_matcher_invalid_regex() {
+        assert!(RecordMatcher::new(None, Some("[invalid"), None).is_err());
+        assert!(RecordMatcher::new(None, None, Some("[invalid")).is_err());
+    }
+
+    #[test]
+    fn test_matcher_invalid_record_type() {
+        assert!(RecordMatcher::new(Some("NOTARECORDTYPE"), None, None).is_err());
+    }
+
+    // --- filter_section ---
+
+    #[test]
+    fn test_filter_section_answers() {
+        let mut msg = Message::new();
+        msg.add_answer(make_record("keep.local."));
+        msg.add_answer(make_aaaa_record("remove.local."));
+        msg.add_name_server(make_aaaa_record("authority.local."));
+
+        filter_section(&mut msg, &Section::Answers, |r| {
+            r.record_type() == hickory_proto::rr::RecordType::AAAA
+        });
+
+        assert_eq!(msg.answers().len(), 1);
+        assert_eq!(msg.name_servers().len(), 1); // untouched
+    }
+
+    #[test]
+    fn test_filter_section_authorities() {
+        let mut msg = Message::new();
+        msg.add_answer(make_record("answer.local."));
+        msg.add_name_server(make_record("ns1.local."));
+        msg.add_name_server(make_record("ns2.local."));
+
+        filter_section(&mut msg, &Section::Authorities, |_| true); // remove all
+
+        assert_eq!(msg.answers().len(), 1); // untouched
+        assert_eq!(msg.name_servers().len(), 0);
+    }
+
+    #[test]
+    fn test_filter_section_additionals() {
+        let mut msg = Message::new();
+        msg.add_additional(make_record("a.local."));
+        msg.add_additional(make_record("b.local."));
+
+        filter_section(&mut msg, &Section::Additionals, |_| true);
+
+        assert_eq!(msg.additionals().len(), 0);
+    }
+
+    #[test]
+    fn test_filter_section_all() {
+        let mut msg = Message::new();
+        msg.add_answer(make_record("a.local."));
+        msg.add_name_server(make_record("ns.local."));
+        msg.add_additional(make_record("add.local."));
+
+        filter_section(&mut msg, &Section::All, |_| true);
+
+        assert_eq!(msg.answers().len(), 0);
+        assert_eq!(msg.name_servers().len(), 0);
+        assert_eq!(msg.additionals().len(), 0);
+    }
+
+    // --- mutate_section ---
+
+    #[test]
+    fn test_mutate_section_answers() {
+        let mut msg = Message::new();
+        msg.add_answer(make_record("a.local."));
+        msg.add_name_server(make_record("ns.local."));
+
+        mutate_section(&mut msg, &Section::Answers, |r| { r.set_ttl(999); });
+
+        assert_eq!(msg.answers()[0].ttl(), 999);
+        assert_eq!(msg.name_servers()[0].ttl(), 120); // untouched
+    }
+
+    #[test]
+    fn test_mutate_section_all() {
+        let mut msg = Message::new();
+        msg.add_answer(make_record("a.local."));
+        msg.add_name_server(make_record("ns.local."));
+        msg.add_additional(make_record("add.local."));
+
+        mutate_section(&mut msg, &Section::All, |r| { r.set_ttl(42); });
+
+        assert_eq!(msg.answers()[0].ttl(), 42);
+        assert_eq!(msg.name_servers()[0].ttl(), 42);
+        assert_eq!(msg.additionals()[0].ttl(), 42);
+    }
+
+    // --- TransformChain ---
+
+    #[test]
+    fn test_chain_empty() {
+        let chain = TransformChain::new(vec![]);
+        assert!(chain.is_empty());
+        let mut msg = Message::new();
+        assert!(chain.apply(&mut msg).unwrap());
+    }
+
+    #[test]
+    fn test_chain_applies_in_order() {
+        // Two SetTtl transforms: first sets 60, second sets 30
+        let t1 = Box::new(set_ttl::SetTtl::new("answers", 60, None).unwrap());
+        let t2 = Box::new(set_ttl::SetTtl::new("answers", 30, None).unwrap());
+        let chain = TransformChain::new(vec![t1, t2]);
+        assert!(!chain.is_empty());
+
+        let mut msg = Message::new();
+        msg.add_answer(make_record("a.local."));
+        chain.apply(&mut msg).unwrap();
+        assert_eq!(msg.answers()[0].ttl(), 30); // second wins
+    }
+
+    // --- build_chain ---
+
+    #[test]
+    fn test_build_chain_empty() {
+        let chain = build_chain(&[]).unwrap();
+        assert!(chain.is_empty());
+    }
+
+    #[test]
+    fn test_build_chain_multiple() {
+        let configs = vec![
+            TransformConfig::SetTtl {
+                section: "answers".into(),
+                value: 60,
+                record_type: None,
+            },
+            TransformConfig::RemoveRecords {
+                section: "all".into(),
+                record_type: Some("AAAA".into()),
+                match_name: None,
+                match_rdata: None,
+            },
+        ];
+        let chain = build_chain(&configs).unwrap();
+        assert!(!chain.is_empty());
+    }
+
+    #[test]
+    fn test_build_chain_remove_services() {
+        let configs = vec![
+            TransformConfig::RemoveServices {
+                match_name: "_googlecast".into(),
+            },
+        ];
+        let chain = build_chain(&configs).unwrap();
+        assert!(!chain.is_empty());
+    }
+
+    // --- TransformChain early exit on false ---
+
+    struct DropTransform;
+    impl Transform for DropTransform {
+        fn apply(&self, _msg: &mut Message) -> Result<bool> { Ok(false) }
+        fn name(&self) -> &str { "drop" }
+    }
+
+    struct PanicTransform;
+    impl Transform for PanicTransform {
+        fn apply(&self, _msg: &mut Message) -> Result<bool> { panic!("should not be called") }
+        fn name(&self) -> &str { "panic" }
+    }
+
+    #[test]
+    fn test_chain_early_exit_on_false() {
+        // First transform drops, second should never run
+        let chain = TransformChain::new(vec![
+            Box::new(DropTransform),
+            Box::new(PanicTransform),
+        ]);
+        let mut msg = Message::new();
+        assert!(!chain.apply(&mut msg).unwrap());
+    }
+
+    // --- mutate_section individual branches ---
+
+    #[test]
+    fn test_mutate_section_authorities() {
+        let mut msg = Message::new();
+        msg.add_answer(make_record("a.local."));
+        msg.add_name_server(make_record("ns.local."));
+
+        mutate_section(&mut msg, &Section::Authorities, |r| { r.set_ttl(7); });
+
+        assert_eq!(msg.answers()[0].ttl(), 120); // untouched
+        assert_eq!(msg.name_servers()[0].ttl(), 7);
+    }
+
+    #[test]
+    fn test_mutate_section_additionals() {
+        let mut msg = Message::new();
+        msg.add_answer(make_record("a.local."));
+        msg.add_additional(make_record("add.local."));
+
+        mutate_section(&mut msg, &Section::Additionals, |r| { r.set_ttl(3); });
+
+        assert_eq!(msg.answers()[0].ttl(), 120); // untouched
+        assert_eq!(msg.additionals()[0].ttl(), 3);
+    }
+
+    // --- Transform::name() ---
+
+    #[test]
+    fn test_transform_names() {
+        let rr = remove_records::RemoveRecords::new("all", None, None, None).unwrap();
+        assert_eq!(rr.name(), "remove_records");
+
+        let rs = remove_records::RemoveServices::new("test").unwrap();
+        assert_eq!(rs.name(), "remove_services");
+
+        let st = set_ttl::SetTtl::new("all", 60, None).unwrap();
+        assert_eq!(st.name(), "set_ttl");
+    }
 }

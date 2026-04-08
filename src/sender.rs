@@ -28,8 +28,16 @@ impl MdnsSender {
         // Don't receive our own reflected packets
         socket.set_multicast_loop_v4(false)?;
 
-        let bind_addr: SockAddr = SocketAddr::from((if_addr, 0)).into();
-        socket.bind(&bind_addr).context("Failed to bind send socket")?;
+        // Bind to device so packets go out on the correct interface
+        #[cfg(target_os = "linux")]
+        socket
+            .bind_device(Some(iface_name.as_bytes()))
+            .with_context(|| format!("Failed to SO_BINDTODEVICE on {}", iface_name))?;
+
+        // mDNS RFC 6762 Section 15.1: responses MUST be sent from port 5353.
+        // Many implementations ignore packets from other source ports.
+        let bind_addr: SockAddr = SocketAddr::from((if_addr, MDNS_PORT)).into();
+        socket.bind(&bind_addr).context("Failed to bind send socket to port 5353")?;
 
         Ok(Self {
             socket: socket.into(),

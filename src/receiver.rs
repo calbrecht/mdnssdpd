@@ -85,8 +85,17 @@ pub fn create_mdns_v4_socket(iface_name: &str) -> Result<UdpSocket> {
     socket.set_multicast_loop_v4(true)?;
     socket.set_multicast_if_v4(&if_addr)?;
 
+    // Bind to 0.0.0.0 for multicast reception — binding to a specific IP
+    // causes the kernel to not deliver multicast packets (dst=224.0.0.251).
+    // SO_BINDTODEVICE restricts reception to this interface only.
+    #[cfg(target_os = "linux")]
+    socket
+        .bind_device(Some(iface_name.as_bytes()))
+        .with_context(|| format!("Failed to SO_BINDTODEVICE on {}", iface_name))?;
     let bind_addr: SockAddr = SocketAddr::from((Ipv4Addr::UNSPECIFIED, MDNS_PORT)).into();
-    socket.bind(&bind_addr).context("Failed to bind IPv4 socket")?;
+    socket
+        .bind(&bind_addr)
+        .with_context(|| format!("Failed to bind IPv4 socket on {}", iface_name))?;
 
     socket
         .join_multicast_v4_n(
@@ -114,6 +123,12 @@ pub fn create_mdns_v6_socket(iface_name: &str) -> Result<UdpSocket> {
 
     let bind_addr: SockAddr = SocketAddr::from((Ipv6Addr::UNSPECIFIED, MDNS_PORT)).into();
     socket.bind(&bind_addr).context("Failed to bind IPv6 socket")?;
+
+    // Bind to device so we only receive traffic from this interface
+    #[cfg(target_os = "linux")]
+    socket
+        .bind_device(Some(iface_name.as_bytes()))
+        .with_context(|| format!("Failed to SO_BINDTODEVICE on {}", iface_name))?;
 
     socket
         .join_multicast_v6(&MDNS_IPV6_ADDR, if_index)
