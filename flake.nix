@@ -13,8 +13,8 @@
   in
   {
     packages = forAllSystems (system: {
-      dnssd-powertools = (pkgsFor system).callPackage ./package.nix {};
-      default = self.packages.${system}.dnssd-powertools;
+      mdnssdpd = (pkgsFor system).callPackage ./package.nix {};
+      default = self.packages.${system}.mdnssdpd;
     });
 
     nixosModules.default = import ./module.nix;
@@ -25,7 +25,7 @@
 
       # NixOS VM integration test
       integration = (pkgsFor system).testers.nixosTest (import ./test-module.nix {
-        dnssd-powertools = self.packages.${system}.dnssd-powertools;
+        mdnssdpd = self.packages.${system}.mdnssdpd;
         dnssdModule = self.nixosModules.default;
       });
     });

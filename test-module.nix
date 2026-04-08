@@ -1,16 +1,16 @@
 /*
-  NixOS VM integration test for dnssd-powertools mDNS reflector.
+  NixOS VM integration test for mdnssdpd mDNS reflector.
 
   Uses the NixOS module with structured route definitions.
 
   Usage from flake.nix:
-    import ./test-module.nix { dnssd-powertools = <package>; dnssdModule = <module>; }
+    import ./test-module.nix { mdnssdpd = <package>; dnssdModule = <module>; }
 
   Standalone:
     nix-build test.nix
 */
 
-{ dnssd-powertools, dnssdModule }:
+{ mdnssdpd, dnssdModule }:
 
 let
   networkBase = {
@@ -32,7 +32,7 @@ let
 
 in
 {
-  name = "dnssd-powertools-reflect";
+  name = "mdnssdpd-reflect";
 
   nodes = {
     client1 = { config, pkgs, ... }: {
@@ -78,9 +78,9 @@ in
       environment.systemPackages = [ pkgs.jq pkgs.tcpdump ];
 
       # --- Structured route configuration via NixOS module ---
-      services.dnssd-powertools = {
+      services.mdnssdpd = {
         enable = true;
-        package = dnssd-powertools;
+        package = mdnssdpd;
 
         routes = {
           # Route 1: Forward queries from control (vlan1) to stream (vlan2)
@@ -155,20 +155,20 @@ in
     client2.wait_for_unit("avahi-daemon.service")
 
     # Wait for the systemd service to be running
-    reflector.wait_for_unit("dnssd-powertools.service")
+    reflector.wait_for_unit("mdnssdpd.service")
 
     # Give avahi time to announce services and IPv6 SLAAC to settle
     client2.succeed("sleep 5")
 
     # --- Test 1: systemd service is active ---
-    with subtest("dnssd-powertools systemd service is active"):
-        status = reflector.succeed("systemctl is-active dnssd-powertools.service").strip()
+    with subtest("mdnssdpd systemd service is active"):
+        status = reflector.succeed("systemctl is-active mdnssdpd.service").strip()
         assert status == "active", f"Service should be active, got: {status}"
 
     # --- Test 2: service stderr shows both interfaces and both routes ---
     with subtest("service listens on both interfaces with both routes"):
         journal = reflector.succeed(
-            "journalctl -u dnssd-powertools.service --no-pager -o cat"
+            "journalctl -u mdnssdpd.service --no-pager -o cat"
         )
         assert "eth1" in journal, f"Should listen on eth1, journal: {journal}"
         assert "eth2" in journal, f"Should listen on eth2, journal: {journal}"
@@ -180,7 +180,7 @@ in
     with subtest("generated config file is valid TOML"):
         # The config path is in the ExecStart line
         exec_line = reflector.succeed(
-            "systemctl show dnssd-powertools.service -p ExecStart --no-pager"
+            "systemctl show mdnssdpd.service -p ExecStart --no-pager"
         )
         # Extract config file path
         import re
@@ -213,7 +213,7 @@ in
         reflector.succeed("sleep 5")
 
         journal = reflector.succeed(
-            "journalctl -u dnssd-powertools.service --no-pager -o cat"
+            "journalctl -u mdnssdpd.service --no-pager -o cat"
         )
         json_lines = [l for l in journal.split('\n') if l.strip().startswith('{')]
         assert len(json_lines) > 0, "Should have JSON log lines in journal"
@@ -228,7 +228,7 @@ in
     # --- Test 7: link-local IPv6 stripped from responses ---
     with subtest("link-local IPv6 addresses are stripped from responses"):
         journal = reflector.succeed(
-            "journalctl -u dnssd-powertools.service --no-pager -o cat"
+            "journalctl -u mdnssdpd.service --no-pager -o cat"
         )
         json_lines = [l for l in journal.split('\n') if l.strip().startswith('{')]
         for line in json_lines:
@@ -249,7 +249,7 @@ in
     # --- Test 9: JSON structure valid, class != UNKNOWN regression ---
     with subtest("all log entries are valid JSON with correct fields"):
         journal = reflector.succeed(
-            "journalctl -u dnssd-powertools.service --no-pager -o cat"
+            "journalctl -u mdnssdpd.service --no-pager -o cat"
         )
         json_lines = [l for l in journal.split('\n') if l.strip().startswith('{')]
         for line in json_lines:
@@ -274,7 +274,7 @@ in
         reflector.succeed("sleep 3")
 
         journal = reflector.succeed(
-            "journalctl -u dnssd-powertools.service --no-pager -o cat"
+            "journalctl -u mdnssdpd.service --no-pager -o cat"
         )
         json_lines = [l for l in journal.split('\n') if l.strip().startswith('{')]
         for line in json_lines:
@@ -292,9 +292,9 @@ in
 
     # --- Test 11: service restarts cleanly ---
     with subtest("service restarts cleanly"):
-        reflector.succeed("systemctl restart dnssd-powertools.service")
-        reflector.wait_for_unit("dnssd-powertools.service")
-        status = reflector.succeed("systemctl is-active dnssd-powertools.service").strip()
+        reflector.succeed("systemctl restart mdnssdpd.service")
+        reflector.wait_for_unit("mdnssdpd.service")
+        status = reflector.succeed("systemctl is-active mdnssdpd.service").strip()
         assert status == "active", f"Should be active after restart, got: {status}"
   '';
 }

@@ -2,7 +2,7 @@
 
 ## What This Project Is
 
-dnssd-powertools is an mDNS (Multicast DNS / DNS-SD) reflector, filter, and diagnostic tool in Rust. It receives mDNS packets on network interfaces, runs them through configurable filter/transform pipelines ("routes"), and outputs them as JSON logs or reflects them as multicast to other interfaces.
+mdnssdpd is an mDNS (Multicast DNS / DNS-SD) reflector, filter, and diagnostic tool in Rust. It receives mDNS packets on network interfaces, runs them through configurable filter/transform pipelines ("routes"), and outputs them as JSON logs or reflects them as multicast to other interfaces.
 
 Primary use case: reflecting mDNS service discovery across VLANs with optional message transformation (e.g., stripping link-local IPv6 addresses before forwarding).
 
@@ -112,10 +112,10 @@ In mDNS, TTL=0 means "goodbye" (tells caches to flush the record). The `set_ttl`
 
 ## NixOS Module Architecture
 
-The module (`module.nix`) provides `services.dnssd-powertools` with fully typed submodules:
+The module (`module.nix`) provides `services.mdnssdpd` with fully typed submodules:
 
 ```
-services.dnssd-powertools
+services.mdnssdpd
   ├── enable: bool
   ├── package: package
   ├── ipv6: bool

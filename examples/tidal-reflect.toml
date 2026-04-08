@@ -1,7 +1,7 @@
 # Tidal Connect: Reflect mDNS between VLANs "control" and "stream"
 #
 # Replace "eth0" / "eth1" with your actual interface names.
-# Run: dnssd-powertools --config examples/tidal-reflect.toml
+# Run: mdnssdpd --config examples/tidal-reflect.toml
 
 # Route 1: Forward queries from control → stream
 # (App discovers streamer)

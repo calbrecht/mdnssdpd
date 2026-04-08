@@ -4,7 +4,7 @@
 }:
 
 rustPlatform.buildRustPackage {
-  pname = "dnssd-powertools";
+  pname = "mdnssdpd";
   version = "0.1.0";
 
   src = lib.cleanSource ./.;
@@ -13,6 +13,6 @@ rustPlatform.buildRustPackage {
 
   meta = {
     description = "DNS-SD/mDNS reflector and power tools";
-    mainProgram = "dnssd-powertools";
+    mainProgram = "mdnssdpd";
   };
 }

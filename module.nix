@@ -1,7 +1,7 @@
 { config, lib, pkgs, ... }:
 
 let
-  cfg = config.services.dnssd-powertools;
+  cfg = config.services.mdnssdpd;
 
   # --- Submodule types ---
 
@@ -306,14 +306,14 @@ let
   };
 
   tomlFormat = pkgs.formats.toml {};
-  configFile = tomlFormat.generate "dnssd-powertools.toml" configTOML;
+  configFile = tomlFormat.generate "mdnssdpd.toml" configTOML;
 
 in
 {
-  options.services.dnssd-powertools = {
-    enable = lib.mkEnableOption "dnssd-powertools mDNS reflector";
+  options.services.mdnssdpd = {
+    enable = lib.mkEnableOption "mdnssdpd mDNS reflector";
 
-    package = lib.mkPackageOption pkgs "dnssd-powertools" {};
+    package = lib.mkPackageOption pkgs "mdnssdpd" {};
 
     ipv6 = lib.mkOption {
       type = lib.types.bool;
@@ -353,7 +353,7 @@ in
     assertions = [
       {
         assertion = cfg.settings != null || cfg.routes != {};
-        message = "services.dnssd-powertools: either `settings` or `routes` must be configured.";
+        message = "services.mdnssdpd: either `settings` or `routes` must be configured.";
       }
     ] ++ lib.concatLists (lib.mapAttrsToList (name: route:
       # Validate transform configs have matching sub-options
@@ -373,7 +373,7 @@ in
       }) route.outputs
     ) cfg.routes);
 
-    systemd.services.dnssd-powertools = {
+    systemd.services.mdnssdpd = {
       description = "DNS-SD/mDNS Reflector and Power Tools";
       after = [ "network-online.target" ];
       wants = [ "network-online.target" ];
@@ -383,10 +383,10 @@ in
         ExecStart = let
           configPath =
             if cfg.settings != null
-            then pkgs.writeText "dnssd-powertools.toml" cfg.settings
+            then pkgs.writeText "mdnssdpd.toml" cfg.settings
             else configFile;
         in
-          "${cfg.package}/bin/dnssd-powertools"
+          "${cfg.package}/bin/mdnssdpd"
           + " --config ${configPath}"
           + lib.optionalString cfg.ipv6 " --ipv6";
 

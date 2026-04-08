@@ -1,4 +1,4 @@
-# dnssd-powertools
+# mdnssdpd
 
 A configurable mDNS (Multicast DNS / DNS-SD) reflector, filter, and diagnostic tool written in Rust. It listens for mDNS traffic on network interfaces, filters and transforms DNS messages declaratively, and can reflect them across VLANs or log them as structured JSON.
 
@@ -28,13 +28,13 @@ nix flake check
 
 ```bash
 cargo build --release
-./target/release/dnssd-powertools --config config.toml
+./target/release/mdnssdpd --config config.toml
 ```
 
 ### List Interfaces
 
 ```bash
-dnssd-powertools --list
+mdnssdpd --list
 ```
 
 ## Architecture
@@ -423,13 +423,13 @@ examples/
 
 ## Testing
 
-### Unit Tests (31 tests)
+### Unit Tests (177 tests, 74% coverage)
 
 ```bash
 cargo test
 ```
 
-Covers: filter operators, path resolution, filter engine composition (chain, AND/OR, invert, jq), transform record removal (link-local IPv6 stripping from answers and additionals, section-specific removal), service removal (full strip, partial strip), TTL setting (with goodbye preservation), cache-flush class masking (wire roundtrip regression), question QU-bit masking.
+Covers: config TOML deserialization and defaults, all 14 filter operators with edge cases, JSON path resolution with nested wildcards, filter engine composition (chain files, AND/OR modes, hide action, invert, jq truthiness), jq compile errors, transform record removal (link-local IPv6 stripping from all sections, per-section removal, regex-only matching), service removal (full strip, partial strip, cross-section), TTL setting (per-section, record type filter, goodbye preservation), RecordMatcher with Display-based rdata, cache-flush class masking (wire roundtrip regression), question QU-bit masking, route pipeline integration (interface matching, filter rejection, transform application, empty packet drop, multi-output dispatch), log output JSON formatting, dispatch loop with loop prevention.
 
 ### NixOS VM Integration Tests (11 subtests)
 
@@ -442,7 +442,7 @@ nix flake check
 Spins up 3 QEMU VMs with 2 VLANs, IPv6 enabled:
 - **client1** (VLAN 1): avahi browser
 - **client2** (VLAN 2): avahi service announcer (TestStreamer `_tidal._tcp`)
-- **reflector** (VLAN 1 + 2): runs dnssd-powertools
+- **reflector** (VLAN 1 + 2): runs mdnssdpd
 
 Tests verify:
 1. systemd service is active
@@ -460,7 +460,7 @@ Tests verify:
 ## Known Limitations / Future Work
 
 - **Log output shows post-transform state**: The `log` output on a route logs packets *after* transforms have been applied. There is currently no way to log the original packet before transformation, and no metadata in the JSON indicating which route processed the packet or how many transforms were applied. This can make debugging confusing — you see what was reflected, not what came in. A future improvement would add fields like `"route": "stream-to-control"` and `"transforms_applied": 2` to the log output.
-- **Loop prevention is too aggressive**: Currently all packets from any local IP address are dropped before reaching any route. This means other services on the same host (e.g., Home Assistant, avahi) are invisible to dnssd-powertools — their mDNS traffic is silently discarded. Loop prevention should only drop packets that dnssd-powertools itself sent (i.e., reflected packets), not all locally-originated mDNS traffic. A better approach would be to track sent packets (e.g., by tagging or hashing recent outgoing packets) rather than blanket-dropping by source IP.
+- **Loop prevention is too aggressive**: Currently all packets from any local IP address are dropped before reaching any route. This means other services on the same host (e.g., Home Assistant, avahi) are invisible to mdnssdpd — their mDNS traffic is silently discarded. Loop prevention should only drop packets that mdnssdpd itself sent (i.e., reflected packets), not all locally-originated mDNS traffic. A better approach would be to track sent packets (e.g., by tagging or hashing recent outgoing packets) rather than blanket-dropping by source IP.
 - **IPv6 reflect sender**: Currently only IPv4 multicast send is implemented (`MdnsSender::new_v4`). IPv6 reflect (`ff02::fb`) is not yet wired up.
 - **`rewrite_ip` transform**: CIDR-based IP address rewriting (dependency `ipnet` is included but transform not yet implemented).
 - **`strip_txt_keys` transform**: Remove specific TXT record keys by regex.
@@ -478,16 +478,16 @@ The flake exposes a NixOS module at `nixosModules.default` with fully typed, str
 
 ```nix
 {
-  inputs.dnssd-powertools.url = "github:your/repo";
+  inputs.mdnssdpd.url = "github:your/repo";
 
-  outputs = { self, nixpkgs, dnssd-powertools, ... }: {
+  outputs = { self, nixpkgs, mdnssdpd, ... }: {
     nixosConfigurations.myhost = nixpkgs.lib.nixosSystem {
       modules = [
-        dnssd-powertools.nixosModules.default
+        mdnssdpd.nixosModules.default
         {
-          services.dnssd-powertools = {
+          services.mdnssdpd = {
             enable = true;
-            package = dnssd-powertools.packages.x86_64-linux.default;
+            package = mdnssdpd.packages.x86_64-linux.default;
 
             routes.sniff-all = {
               input = [ "eth0" ];
@@ -504,7 +504,7 @@ The flake exposes a NixOS module at `nixosModules.default` with fully typed, str
 ### Cross-VLAN Reflection
 
 ```nix
-services.dnssd-powertools = {
+services.mdnssdpd = {
   enable = true;
 
   routes = {
@@ -558,7 +558,7 @@ services.dnssd-powertools = {
 ### Enterprise Printer-Only Reflection
 
 ```nix
-services.dnssd-powertools.routes.printers-only = {
+services.mdnssdpd.routes.printers-only = {
   input = [ "office" ];
   filter = {
     jq = [ ''.message.answers | any(.name | test("_ipp|_printer"))'' ];
@@ -582,7 +582,7 @@ services.dnssd-powertools.routes.printers-only = {
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `enable` | bool | `false` | Enable the service |
-| `package` | package | `pkgs.dnssd-powertools` | Package to use |
+| `package` | package | `pkgs.mdnssdpd` | Package to use |
 | `ipv6` | bool | `false` | Join IPv6 multicast group |
 | `settings` | null or string | `null` | Raw TOML config (bypasses `routes`) |
 | `routes.<name>.input` | list of string | — | Input interfaces |

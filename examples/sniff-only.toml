@@ -1,6 +1,6 @@
 # Pure sniff/log mode — log all mDNS traffic as JSON to stdout
 #
-# Run: dnssd-powertools --config examples/sniff-only.toml
+# Run: mdnssdpd --config examples/sniff-only.toml
 
 [[route]]
 name = "sniff-all"
