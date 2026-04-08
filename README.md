@@ -423,15 +423,15 @@ examples/
 
 ## Testing
 
-### Unit Tests (28 tests)
+### Unit Tests (31 tests)
 
 ```bash
 cargo test
 ```
 
-Covers: filter operators, path resolution, filter engine composition (chain, AND/OR, invert, jq), transform record removal (link-local IPv6 stripping, section-specific), TTL setting (with goodbye preservation), cache-flush class masking (wire roundtrip regression), question QU-bit masking.
+Covers: filter operators, path resolution, filter engine composition (chain, AND/OR, invert, jq), transform record removal (link-local IPv6 stripping from answers and additionals, section-specific removal), service removal (full strip, partial strip), TTL setting (with goodbye preservation), cache-flush class masking (wire roundtrip regression), question QU-bit masking.
 
-### NixOS VM Integration Tests (8 subtests)
+### NixOS VM Integration Tests (11 subtests)
 
 ```bash
 nix-build test.nix
@@ -445,17 +445,22 @@ Spins up 3 QEMU VMs with 2 VLANs, IPv6 enabled:
 - **reflector** (VLAN 1 + 2): runs dnssd-powertools
 
 Tests verify:
-1. IPv6 link-local addresses are present
-2. client2 sees its own service
-3. client1 **cannot** see client2's service (VLAN isolation)
-4. Reflector starts on both interfaces
-5. Reflector captures and logs mDNS queries
-6. Link-local IPv6 AAAA records are stripped from responses
-7. IPv6 is active and avahi publishes over IPv6
-8. All log entries are valid JSON with correct fields, `class` is never `"UNKNOWN"` (cache-flush regression)
+1. systemd service is active
+2. Both interfaces and routes are logged
+3. Generated TOML config is valid and contains expected routes/transforms
+4. IPv6 link-local addresses are present
+5. client2 sees its own service locally
+6. Reflector captures and logs mDNS queries
+7. Link-local IPv6 AAAA records are stripped from responses
+8. IPv6 is active and avahi publishes over IPv6
+9. All log entries are valid JSON, `class` is never `"UNKNOWN"` (cache-flush regression)
+10. Empty packets after transforms (e.g., stripped `_googlecast` queries) are not logged or reflected
+11. Service restarts cleanly
 
 ## Known Limitations / Future Work
 
+- **Log output shows post-transform state**: The `log` output on a route logs packets *after* transforms have been applied. There is currently no way to log the original packet before transformation, and no metadata in the JSON indicating which route processed the packet or how many transforms were applied. This can make debugging confusing — you see what was reflected, not what came in. A future improvement would add fields like `"route": "stream-to-control"` and `"transforms_applied": 2` to the log output.
+- **Loop prevention is too aggressive**: Currently all packets from any local IP address are dropped before reaching any route. This means other services on the same host (e.g., Home Assistant, avahi) are invisible to dnssd-powertools — their mDNS traffic is silently discarded. Loop prevention should only drop packets that dnssd-powertools itself sent (i.e., reflected packets), not all locally-originated mDNS traffic. A better approach would be to track sent packets (e.g., by tagging or hashing recent outgoing packets) rather than blanket-dropping by source IP.
 - **IPv6 reflect sender**: Currently only IPv4 multicast send is implemented (`MdnsSender::new_v4`). IPv6 reflect (`ff02::fb`) is not yet wired up.
 - **`rewrite_ip` transform**: CIDR-based IP address rewriting (dependency `ipnet` is included but transform not yet implemented).
 - **`strip_txt_keys` transform**: Remove specific TXT record keys by regex.

@@ -39,6 +39,7 @@
           rustc
           rustfmt
           clippy
+          cargo-tarpaulin
         ];
       };
     });

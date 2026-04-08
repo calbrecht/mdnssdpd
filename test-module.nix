@@ -84,6 +84,7 @@ in
 
         routes = {
           # Route 1: Forward queries from control (vlan1) to stream (vlan2)
+          # Strip _googlecast queries — should result in dropped empty packets
           control-to-stream = {
             input = [ "eth1" ];
             filter = {
@@ -95,6 +96,10 @@ in
                 }];
               }];
             };
+            transforms = [{
+              type = "remove_services";
+              removeServices.matchName = "_googlecast";
+            }];
             outputs = [
               { type = "reflect"; reflect.interfaces = [ "eth2" ]; }
               { type = "log"; }
@@ -261,7 +266,31 @@ in
                     assert record["class"] != "UNKNOWN", \
                         f"class should not be UNKNOWN: {record}"
 
-    # --- Test 10: service restarts cleanly ---
+    # --- Test 10: empty packets after transforms are not logged ---
+    with subtest("empty packets after transforms are dropped"):
+        # Trigger a _googlecast query from client1 — this should be stripped
+        # by remove_services and the empty packet should NOT appear in logs
+        client1.succeed("avahi-browse -t -p _googlecast._tcp >/dev/null 2>&1 || true")
+        reflector.succeed("sleep 3")
+
+        journal = reflector.succeed(
+            "journalctl -u dnssd-powertools.service --no-pager -o cat"
+        )
+        json_lines = [l for l in journal.split('\n') if l.strip().startswith('{')]
+        for line in json_lines:
+            entry = json.loads(line)
+            msg = entry["message"]
+            # No logged packet should have all sections empty
+            has_content = (
+                len(msg.get("questions", [])) > 0
+                or len(msg.get("answers", [])) > 0
+                or len(msg.get("authorities", [])) > 0
+                or len(msg.get("additionals", [])) > 0
+            )
+            assert has_content, \
+                f"Empty packet should not be logged/reflected: {entry['timestamp']} from {entry['source']}"
+
+    # --- Test 11: service restarts cleanly ---
     with subtest("service restarts cleanly"):
         reflector.succeed("systemctl restart dnssd-powertools.service")
         reflector.wait_for_unit("dnssd-powertools.service")
