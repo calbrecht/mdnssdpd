@@ -235,12 +235,12 @@ impl FilterEngine {
         // Compile each config into a chain link
         for config in &configs {
             let mode = match config.mode.as_str() {
-                "any" => FilterMode::Any,
+                "any" | "" => FilterMode::Any,
                 "all" => FilterMode::All,
                 other => anyhow::bail!("Unknown filter mode '{}'. Expected: any, all", other),
             };
             let action = match config.action.as_str() {
-                "show" => FilterAction::Show,
+                "show" | "" => FilterAction::Show,
                 "hide" => FilterAction::Hide,
                 other => anyhow::bail!("Unknown filter action '{}'. Expected: show, hide", other),
             };
