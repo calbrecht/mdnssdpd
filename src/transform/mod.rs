@@ -240,6 +240,23 @@ mod tests {
     fn test_section_parse_invalid() {
         assert!(Section::parse("unknown").is_err());
         assert!(Section::parse("").is_err());
+        assert!(Section::parse("answres").is_err()); // typo
+        assert!(Section::parse("ALL").is_err()); // case sensitive
+        assert!(Section::parse("Answers").is_err()); // case sensitive
+    }
+
+    #[test]
+    fn test_section_parse_error_message() {
+        let err = Section::parse("answres").unwrap_err();
+        assert!(err.to_string().contains("answres"));
+        assert!(err.to_string().contains("answers"));
+    }
+
+    #[test]
+    fn test_section_default_from_config_is_all() {
+        // config.rs sets default_section_all() -> "all"
+        // verify that "all" is accepted
+        assert!(matches!(Section::parse("all").unwrap(), Section::All));
     }
 
     // --- RecordMatcher ---

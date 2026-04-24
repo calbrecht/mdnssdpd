@@ -815,4 +815,157 @@ mod tests {
         let configs = load_configs(&[]).unwrap();
         assert!(configs.is_empty());
     }
+
+    // --- Mode/action validation and defaults ---
+
+    #[test]
+    fn test_mode_default_any_when_omitted() {
+        // serde default fills "any" — verify FilterEngine accepts it
+        let cfg = FilterConfig {
+            mode: "any".into(),
+            action: "show".into(),
+            rule: vec![Rule {
+                negate: false,
+                condition: vec![Condition {
+                    path: "message.message_type".into(),
+                    op: Op::Eq,
+                    value: json!("response"),
+                }],
+            }],
+            chain: vec![],
+        };
+        let engine = FilterEngine::build(vec![cfg], &[]).unwrap().unwrap();
+        assert!(engine.should_print(&test_entry()));
+    }
+
+    #[test]
+    fn test_mode_empty_string_defaults_to_any() {
+        let cfg = FilterConfig {
+            mode: "".into(),
+            action: "show".into(),
+            rule: vec![Rule {
+                negate: false,
+                condition: vec![Condition {
+                    path: "message.message_type".into(),
+                    op: Op::Eq,
+                    value: json!("response"),
+                }],
+            }],
+            chain: vec![],
+        };
+        // Should not error — empty mode defaults to any
+        let engine = FilterEngine::build(vec![cfg], &[]).unwrap().unwrap();
+        assert!(engine.should_print(&test_entry()));
+    }
+
+    #[test]
+    fn test_mode_invalid_value_rejected() {
+        let cfg = FilterConfig {
+            mode: "anyyy".into(),
+            action: "show".into(),
+            rule: vec![Rule {
+                negate: false,
+                condition: vec![Condition {
+                    path: "message.message_type".into(),
+                    op: Op::Eq,
+                    value: json!("response"),
+                }],
+            }],
+            chain: vec![],
+        };
+        let result = FilterEngine::build(vec![cfg], &[]);
+        let err = result.err().expect("should fail on invalid mode");
+        assert!(err.to_string().contains("Unknown filter mode"));
+    }
+
+    #[test]
+    fn test_action_empty_string_defaults_to_show() {
+        let cfg = FilterConfig {
+            mode: "any".into(),
+            action: "".into(),
+            rule: vec![Rule {
+                negate: false,
+                condition: vec![Condition {
+                    path: "message.message_type".into(),
+                    op: Op::Eq,
+                    value: json!("response"),
+                }],
+            }],
+            chain: vec![],
+        };
+        // Should not error — empty action defaults to show
+        let engine = FilterEngine::build(vec![cfg], &[]).unwrap().unwrap();
+        assert!(engine.should_print(&test_entry()));
+    }
+
+    #[test]
+    fn test_action_invalid_value_rejected() {
+        let cfg = FilterConfig {
+            mode: "any".into(),
+            action: "block".into(),
+            rule: vec![Rule {
+                negate: false,
+                condition: vec![Condition {
+                    path: "message.message_type".into(),
+                    op: Op::Eq,
+                    value: json!("response"),
+                }],
+            }],
+            chain: vec![],
+        };
+        let result = FilterEngine::build(vec![cfg], &[]);
+        let err = result.err().expect("should fail on invalid action");
+        assert!(err.to_string().contains("Unknown filter action"));
+    }
+
+    #[test]
+    fn test_mode_and_action_from_toml_defaults() {
+        // Simulate what serde does: when mode/action are omitted in TOML,
+        // serde fills "any"/"show" via default functions
+        let toml_str = r#"
+            [[rule]]
+            [[rule.condition]]
+            path = "message.message_type"
+            op = "eq"
+            value = "response"
+        "#;
+        let cfg: FilterConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.mode, "any");
+        assert_eq!(cfg.action, "show");
+        let engine = FilterEngine::build(vec![cfg], &[]).unwrap().unwrap();
+        assert!(engine.should_print(&test_entry()));
+    }
+
+    #[test]
+    fn test_mode_all_explicit_in_toml() {
+        let toml_str = r#"
+            mode = "all"
+            [[rule]]
+            [[rule.condition]]
+            path = "message.message_type"
+            op = "eq"
+            value = "response"
+        "#;
+        let cfg: FilterConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.mode, "all");
+        let engine = FilterEngine::build(vec![cfg], &[]).unwrap().unwrap();
+        assert!(engine.should_print(&test_entry()));
+    }
+
+    #[test]
+    fn test_action_hide_explicit_in_toml() {
+        let toml_str = r#"
+            action = "hide"
+            [[rule]]
+            [[rule.condition]]
+            path = "message.message_type"
+            op = "eq"
+            value = "response"
+        "#;
+        let cfg: FilterConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.action, "hide");
+        let engine = FilterEngine::build(vec![cfg], &[]).unwrap().unwrap();
+        // response matches hide rule → should NOT print
+        assert!(!engine.should_print(&test_entry()));
+    }
 }
