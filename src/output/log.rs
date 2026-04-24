@@ -3,15 +3,11 @@ use anyhow::Result;
 use crate::dns_util;
 use super::{Output, OutputContext};
 
-pub struct LogOutput {
-    format: String,
-}
+pub struct LogOutput;
 
 impl LogOutput {
-    pub fn new(format: &str) -> Self {
-        Self {
-            format: format.to_string(),
-        }
+    pub fn new() -> Self {
+        Self
     }
 
     /// Format the packet as a string (separated from I/O for testability).
@@ -69,15 +65,14 @@ mod tests {
 
     #[test]
     fn test_log_output_new() {
-        let log = LogOutput::new("json");
-        assert_eq!(log.format, "json");
+        let log = LogOutput::new();
         assert_eq!(log.name(), "log");
     }
 
     #[test]
     fn test_format_entry_json() {
         let (event, msg, wire) = make_test_context();
-        let log = LogOutput::new("json");
+        let log = LogOutput::new();
         let ctx = OutputContext { event: &event, msg: &msg, wire_bytes: &wire };
         let json_str = log.format_entry(&ctx).unwrap();
 
@@ -91,20 +86,9 @@ mod tests {
     }
 
     #[test]
-    fn test_format_entry_unknown_format_still_works() {
-        let (event, msg, wire) = make_test_context();
-        let log = LogOutput::new("unknown_format");
-        let ctx = OutputContext { event: &event, msg: &msg, wire_bytes: &wire };
-        // Should still produce valid JSON (fallback)
-        let json_str = log.format_entry(&ctx).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
-        assert!(parsed["timestamp"].is_string());
-    }
-
-    #[test]
     fn test_format_entry_contains_all_fields() {
         let (event, msg, wire) = make_test_context();
-        let log = LogOutput::new("json");
+        let log = LogOutput::new();
         let ctx = OutputContext { event: &event, msg: &msg, wire_bytes: &wire };
         let json_str = log.format_entry(&ctx).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
@@ -123,7 +107,7 @@ mod tests {
     #[test]
     fn test_emit_does_not_error() {
         let (event, msg, wire) = make_test_context();
-        let log = LogOutput::new("json");
+        let log = LogOutput::new();
         let ctx = OutputContext { event: &event, msg: &msg, wire_bytes: &wire };
         // emit() prints to stdout — just verify it doesn't error
         assert!(log.emit(&ctx).is_ok());

@@ -121,14 +121,14 @@ pub fn create_mdns_v6_socket(iface_name: &str) -> Result<UdpSocket> {
     socket.set_multicast_loop_v6(true)?;
     socket.set_multicast_if_v6(if_index)?;
 
-    let bind_addr: SockAddr = SocketAddr::from((Ipv6Addr::UNSPECIFIED, MDNS_PORT)).into();
-    socket.bind(&bind_addr).context("Failed to bind IPv6 socket")?;
-
     // Bind to device so we only receive traffic from this interface
     #[cfg(target_os = "linux")]
     socket
         .bind_device(Some(iface_name.as_bytes()))
         .with_context(|| format!("Failed to SO_BINDTODEVICE on {}", iface_name))?;
+
+    let bind_addr: SockAddr = SocketAddr::from((Ipv6Addr::UNSPECIFIED, MDNS_PORT)).into();
+    socket.bind(&bind_addr).context("Failed to bind IPv6 socket")?;
 
     socket
         .join_multicast_v6(&MDNS_IPV6_ADDR, if_index)
