@@ -18,7 +18,7 @@ impl RemoveRecords {
         match_rdata: Option<&str>,
     ) -> Result<Self> {
         Ok(Self {
-            section: Section::parse(section),
+            section: Section::parse(section)?,
             matcher: RecordMatcher::new(record_type, match_name, match_rdata)?,
         })
     }
@@ -28,10 +28,6 @@ impl Transform for RemoveRecords {
     fn apply(&self, msg: &mut Message) -> Result<bool> {
         filter_section(msg, &self.section, |r| self.matcher.matches(r));
         Ok(true)
-    }
-
-    fn name(&self) -> &str {
-        "remove_records"
     }
 }
 
@@ -65,10 +61,6 @@ impl Transform for RemoveServices {
         });
 
         Ok(true)
-    }
-
-    fn name(&self) -> &str {
-        "remove_services"
     }
 }
 
@@ -183,7 +175,7 @@ mod tests {
     #[test]
     fn test_remove_services_leaves_empty_message() {
         use hickory_proto::op::Query;
-        use hickory_proto::rr::rdata::{SRV, TXT};
+
 
         let mut msg = Message::new();
         msg.set_message_type(MessageType::Query);

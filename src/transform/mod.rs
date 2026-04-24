@@ -18,12 +18,13 @@ pub enum Section {
 }
 
 impl Section {
-    pub fn parse(s: &str) -> Self {
+    pub fn parse(s: &str) -> Result<Self> {
         match s {
-            "answers" => Self::Answers,
-            "authorities" => Self::Authorities,
-            "additionals" => Self::Additionals,
-            _ => Self::All,
+            "answers" => Ok(Self::Answers),
+            "authorities" => Ok(Self::Authorities),
+            "additionals" => Ok(Self::Additionals),
+            "all" => Ok(Self::All),
+            other => Err(anyhow::anyhow!("Unknown section '{}'. Expected: answers, authorities, additionals, all", other)),
         }
     }
 }
@@ -91,7 +92,6 @@ impl RecordMatcher {
 pub trait Transform: Send + Sync {
     /// Apply the transform. Return Ok(true) to continue, Ok(false) to drop the packet.
     fn apply(&self, msg: &mut Message) -> Result<bool>;
-    fn name(&self) -> &str;
 }
 
 /// An ordered chain of transforms.
@@ -230,12 +230,33 @@ mod tests {
 
     #[test]
     fn test_section_parse_all_variants() {
-        assert!(matches!(Section::parse("answers"), Section::Answers));
-        assert!(matches!(Section::parse("authorities"), Section::Authorities));
-        assert!(matches!(Section::parse("additionals"), Section::Additionals));
-        assert!(matches!(Section::parse("all"), Section::All));
-        assert!(matches!(Section::parse("unknown"), Section::All));
-        assert!(matches!(Section::parse(""), Section::All));
+        assert!(matches!(Section::parse("answers").unwrap(), Section::Answers));
+        assert!(matches!(Section::parse("authorities").unwrap(), Section::Authorities));
+        assert!(matches!(Section::parse("additionals").unwrap(), Section::Additionals));
+        assert!(matches!(Section::parse("all").unwrap(), Section::All));
+    }
+
+    #[test]
+    fn test_section_parse_invalid() {
+        assert!(Section::parse("unknown").is_err());
+        assert!(Section::parse("").is_err());
+        assert!(Section::parse("answres").is_err()); // typo
+        assert!(Section::parse("ALL").is_err()); // case sensitive
+        assert!(Section::parse("Answers").is_err()); // case sensitive
+    }
+
+    #[test]
+    fn test_section_parse_error_message() {
+        let err = Section::parse("answres").unwrap_err();
+        assert!(err.to_string().contains("answres"));
+        assert!(err.to_string().contains("answers"));
+    }
+
+    #[test]
+    fn test_section_default_from_config_is_all() {
+        // config.rs sets default_section_all() -> "all"
+        // verify that "all" is accepted
+        assert!(matches!(Section::parse("all").unwrap(), Section::All));
     }
 
     // --- RecordMatcher ---
@@ -436,13 +457,11 @@ mod tests {
     struct DropTransform;
     impl Transform for DropTransform {
         fn apply(&self, _msg: &mut Message) -> Result<bool> { Ok(false) }
-        fn name(&self) -> &str { "drop" }
     }
 
     struct PanicTransform;
     impl Transform for PanicTransform {
         fn apply(&self, _msg: &mut Message) -> Result<bool> { panic!("should not be called") }
-        fn name(&self) -> &str { "panic" }
     }
 
     #[test]
@@ -482,17 +501,4 @@ mod tests {
         assert_eq!(msg.additionals()[0].ttl(), 3);
     }
 
-    // --- Transform::name() ---
-
-    #[test]
-    fn test_transform_names() {
-        let rr = remove_records::RemoveRecords::new("all", None, None, None).unwrap();
-        assert_eq!(rr.name(), "remove_records");
-
-        let rs = remove_records::RemoveServices::new("test").unwrap();
-        assert_eq!(rs.name(), "remove_services");
-
-        let st = set_ttl::SetTtl::new("all", 60, None).unwrap();
-        assert_eq!(st.name(), "set_ttl");
-    }
 }

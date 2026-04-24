@@ -43,8 +43,6 @@ pub struct RouteFilterConfig {
 #[derive(Debug, Deserialize)]
 pub struct RouteFilterRule {
     #[serde(default)]
-    pub name: Option<String>,
-    #[serde(default)]
     pub negate: bool,
     #[serde(default)]
     pub condition: Vec<RouteFilterCondition>,
@@ -98,16 +96,12 @@ pub enum OutputConfig {
         interfaces: Vec<String>,
     },
     #[serde(rename = "log")]
-    Log {
-        #[serde(default = "default_log_format")]
-        format: String,
-    },
+    Log {},
 }
 
 fn default_mode() -> String { "any".into() }
 fn default_action() -> String { "show".into() }
 fn default_section_all() -> String { "all".into() }
-fn default_log_format() -> String { "json".into() }
 
 impl Config {
     pub fn load(path: &str) -> anyhow::Result<Self> {
@@ -146,14 +140,14 @@ mod tests {
                     input: vec!["eth0".into(), "eth1".into()],
                     filter: None,
                     transform: vec![],
-                    output: vec![OutputConfig::Log { format: "json".into() }],
+                    output: vec![OutputConfig::Log {}],
                 },
                 RouteConfig {
                     name: "r2".into(),
                     input: vec!["eth1".into(), "eth2".into()],
                     filter: None,
                     transform: vec![],
-                    output: vec![OutputConfig::Log { format: "json".into() }],
+                    output: vec![OutputConfig::Log {}],
                 },
             ],
         };
