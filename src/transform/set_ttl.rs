@@ -21,7 +21,7 @@ impl SetTtl {
             None => None,
         };
         Ok(Self {
-            section: Section::parse(section),
+            section: Section::parse(section)?,
             value,
             record_type,
         })
@@ -47,10 +47,6 @@ impl Transform for SetTtl {
         });
 
         Ok(true)
-    }
-
-    fn name(&self) -> &str {
-        "set_ttl"
     }
 }
 

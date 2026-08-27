@@ -187,7 +187,7 @@ mod tests {
     #[test]
     fn test_has_reflect_output_false() {
         let cfg = make_test_config(vec![
-            OutputConfig::Log { format: "json".into() },
+            OutputConfig::Log {},
         ]);
         assert!(!has_reflect_output(&cfg));
     }
@@ -195,7 +195,7 @@ mod tests {
     #[test]
     fn test_has_reflect_output_mixed() {
         let cfg = make_test_config(vec![
-            OutputConfig::Log { format: "json".into() },
+            OutputConfig::Log {},
             OutputConfig::Reflect { interfaces: vec!["eth1".into()] },
         ]);
         assert!(has_reflect_output(&cfg));

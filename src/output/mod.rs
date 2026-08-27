@@ -26,8 +26,8 @@ pub fn build_outputs(configs: &[OutputConfig]) -> Result<Vec<Box<dyn Output>>> {
 
     for config in configs {
         match config {
-            OutputConfig::Log { format } => {
-                outputs.push(Box::new(log::LogOutput::new(format)));
+            OutputConfig::Log {} => {
+                outputs.push(Box::new(log::LogOutput::new()));
             }
             OutputConfig::Reflect { interfaces } => {
                 for iface in interfaces {

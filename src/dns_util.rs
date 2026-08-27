@@ -158,7 +158,7 @@ fn parse_rdata_detail(rdata: &RData) -> (String, Option<serde_json::Value>) {
             let detail = json!({ "type": "OPT" });
             ("OPT".into(), Some(detail))
         }
-        other => (format!("{:?}", other), None),
+        other => (format!("{}", other), None),
     }
 }
 
@@ -192,7 +192,7 @@ mod tests {
     use hickory_proto::op::{Message, MessageType, Query};
     use hickory_proto::rr::rdata::{A, AAAA, SRV};
     use hickory_proto::rr::{DNSClass, Name, RData, Record, RecordType};
-    use std::net::{Ipv4Addr, Ipv6Addr};
+    use std::net::Ipv4Addr;
     use std::str::FromStr;
 
     /// Build a response Message with cache-flush records, mimicking real mDNS traffic.

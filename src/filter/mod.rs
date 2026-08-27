@@ -35,8 +35,6 @@ pub struct FilterConfig {
 #[derive(Debug, Deserialize)]
 pub struct Rule {
     #[serde(default)]
-    pub name: Option<String>,
-    #[serde(default)]
     pub negate: bool,
     #[serde(default)]
     pub condition: Vec<Condition>,
@@ -224,28 +222,27 @@ enum FilterAction {
 pub struct FilterEngine {
     chain: Vec<ChainLink>,
     jq_filters: Vec<CompiledJq>,
-    invert: bool,
 }
 
 impl FilterEngine {
     /// Build a filter engine from all sources.
     pub fn build(
         configs: Vec<FilterConfig>,
-        inline_filters: &[String],
         jq_exprs: &[String],
-        invert: bool,
     ) -> Result<Option<Self>> {
         let mut chain: Vec<ChainLink> = Vec::new();
 
         // Compile each config into a chain link
         for config in &configs {
             let mode = match config.mode.as_str() {
+                "any" | "" => FilterMode::Any,
                 "all" => FilterMode::All,
-                _ => FilterMode::Any,
+                other => anyhow::bail!("Unknown filter mode '{}'. Expected: any, all", other),
             };
             let action = match config.action.as_str() {
+                "show" | "" => FilterAction::Show,
                 "hide" => FilterAction::Hide,
-                _ => FilterAction::Show,
+                other => anyhow::bail!("Unknown filter action '{}'. Expected: show, hide", other),
             };
 
             let rules: Vec<CompiledRule> = config
@@ -271,25 +268,6 @@ impl FilterEngine {
             chain.push(ChainLink { rules, mode, action });
         }
 
-        // Compile inline filters as one chain link
-        if !inline_filters.is_empty() {
-            let mut conditions = Vec::new();
-            for expr in inline_filters {
-                let (path, op, value) = ops::parse_inline(expr)
-                    .map_err(|e| anyhow::anyhow!("{}", e))?;
-                conditions.push(CompiledCondition {
-                    segments: parse_path(&path),
-                    op,
-                    value,
-                });
-            }
-            chain.push(ChainLink {
-                rules: vec![CompiledRule { negate: false, conditions }],
-                mode: FilterMode::All,
-                action: FilterAction::Show,
-            });
-        }
-
         // Compile jq filters
         let mut jq_filters = Vec::new();
         for expr in jq_exprs {
@@ -302,19 +280,11 @@ impl FilterEngine {
             return Ok(None);
         }
 
-        Ok(Some(Self { chain, jq_filters, invert }))
+        Ok(Some(Self { chain, jq_filters }))
     }
 
     /// Check if a serialized log entry should be printed.
     pub fn should_print(&self, entry: &Value) -> bool {
-        let mut result = self.matches(entry);
-        if self.invert {
-            result = !result;
-        }
-        result
-    }
-
-    fn matches(&self, entry: &Value) -> bool {
         // Every chain link must pass (AND)
         let chain_pass = self.chain.iter().all(|link| link.should_pass(entry));
         // Every jq filter must be truthy (AND)
@@ -327,6 +297,22 @@ impl FilterEngine {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn make_filter(path: &str, op: Op, value: Value) -> FilterConfig {
+        FilterConfig {
+            mode: "any".into(),
+            action: "show".into(),
+            rule: vec![Rule {
+                negate: false,
+                condition: vec![Condition {
+                    path: path.into(),
+                    op,
+                    value,
+                }],
+            }],
+            chain: vec![],
+        }
+    }
 
     fn test_entry() -> Value {
         json!({
@@ -356,35 +342,23 @@ mod tests {
     }
 
     #[test]
-    fn test_inline_filter() {
-        let engine = FilterEngine::build(
-            vec![],
-            &["message.message_type eq response".into()],
-            &[],
-            false,
-        ).unwrap().unwrap();
+    fn test_simple_filter() {
+        let cfg = make_filter("message.message_type", Op::Eq, json!("response"));
+        let engine = FilterEngine::build(vec![cfg], &[]).unwrap().unwrap();
         assert!(engine.should_print(&test_entry()));
     }
 
     #[test]
-    fn test_inline_filter_no_match() {
-        let engine = FilterEngine::build(
-            vec![],
-            &["message.message_type eq query".into()],
-            &[],
-            false,
-        ).unwrap().unwrap();
+    fn test_simple_filter_no_match() {
+        let cfg = make_filter("message.message_type", Op::Eq, json!("query"));
+        let engine = FilterEngine::build(vec![cfg], &[]).unwrap().unwrap();
         assert!(!engine.should_print(&test_entry()));
     }
 
     #[test]
     fn test_array_wildcard_filter() {
-        let engine = FilterEngine::build(
-            vec![],
-            &["message.answers[*].record_type eq A".into()],
-            &[],
-            false,
-        ).unwrap().unwrap();
+        let cfg = make_filter("message.answers[*].record_type", Op::Eq, json!("A"));
+        let engine = FilterEngine::build(vec![cfg], &[]).unwrap().unwrap();
         assert!(engine.should_print(&test_entry()));
     }
 
@@ -392,9 +366,7 @@ mod tests {
     fn test_jq_filter() {
         let engine = FilterEngine::build(
             vec![],
-            &[],
             &[".message.message_type == \"response\"".into()],
-            false,
         ).unwrap().unwrap();
         assert!(engine.should_print(&test_entry()));
     }
@@ -403,27 +375,14 @@ mod tests {
     fn test_jq_filter_complex() {
         let engine = FilterEngine::build(
             vec![],
-            &[],
             &[".message.answers | map(select(.record_type == \"A\")) | length > 0".into()],
-            false,
         ).unwrap().unwrap();
         assert!(engine.should_print(&test_entry()));
     }
 
     #[test]
-    fn test_invert() {
-        let engine = FilterEngine::build(
-            vec![],
-            &["message.message_type eq response".into()],
-            &[],
-            true,
-        ).unwrap().unwrap();
-        assert!(!engine.should_print(&test_entry()));
-    }
-
-    #[test]
     fn test_no_filters_returns_none() {
-        let result = FilterEngine::build(vec![], &[], &[], false).unwrap();
+        let result = FilterEngine::build(vec![], &[]).unwrap();
         assert!(result.is_none());
     }
 
@@ -434,7 +393,6 @@ mod tests {
             mode: "any".into(),
             action: "show".into(),
             rule: vec![Rule {
-                name: None,
                 negate: false,
                 condition: vec![Condition {
                     path: "message.message_type".into(),
@@ -449,7 +407,6 @@ mod tests {
             mode: "any".into(),
             action: "show".into(),
             rule: vec![Rule {
-                name: None,
                 negate: false,
                 condition: vec![Condition {
                     path: "message.answers[*].record_type".into(),
@@ -461,7 +418,7 @@ mod tests {
         };
 
         // Both pass -> print
-        let engine = FilterEngine::build(vec![cfg1, cfg2], &[], &[], false)
+        let engine = FilterEngine::build(vec![cfg1, cfg2], &[])
             .unwrap().unwrap();
         assert!(engine.should_print(&test_entry()));
     }
@@ -473,7 +430,6 @@ mod tests {
             mode: "any".into(),
             action: "show".into(),
             rule: vec![Rule {
-                name: None,
                 negate: false,
                 condition: vec![Condition {
                     path: "message.message_type".into(),
@@ -488,7 +444,6 @@ mod tests {
             mode: "any".into(),
             action: "show".into(),
             rule: vec![Rule {
-                name: None,
                 negate: false,
                 condition: vec![Condition {
                     path: "message.answers[*].record_type".into(),
@@ -499,7 +454,7 @@ mod tests {
             chain: vec![],
         };
 
-        let engine = FilterEngine::build(vec![cfg1, cfg2], &[], &[], false)
+        let engine = FilterEngine::build(vec![cfg1, cfg2], &[])
             .unwrap().unwrap();
         assert!(!engine.should_print(&test_entry()));
     }
@@ -511,7 +466,6 @@ mod tests {
             mode: "any".into(),
             action: "show".into(),
             rule: vec![Rule {
-                name: None,
                 negate: false,
                 condition: vec![Condition {
                     path: "message.message_type".into(),
@@ -526,7 +480,6 @@ mod tests {
             mode: "any".into(),
             action: "hide".into(),
             rule: vec![Rule {
-                name: None,
                 negate: false,
                 condition: vec![Condition {
                     path: "source".into(),
@@ -537,7 +490,7 @@ mod tests {
             chain: vec![],
         };
 
-        let engine = FilterEngine::build(vec![cfg1, cfg2], &[], &[], false)
+        let engine = FilterEngine::build(vec![cfg1, cfg2], &[])
             .unwrap().unwrap();
         // Response matches cfg1, but source matches cfg2's hide -> blocked
         assert!(!engine.should_print(&test_entry()));
@@ -548,7 +501,7 @@ mod tests {
     #[test]
     fn test_jq_returns_null_is_falsy() {
         let engine = FilterEngine::build(
-            vec![], &[], &["null".into()], false,
+            vec![], &["null".into()],
         ).unwrap().unwrap();
         assert!(!engine.should_print(&test_entry()));
     }
@@ -556,7 +509,7 @@ mod tests {
     #[test]
     fn test_jq_returns_false_is_falsy() {
         let engine = FilterEngine::build(
-            vec![], &[], &["false".into()], false,
+            vec![], &["false".into()],
         ).unwrap().unwrap();
         assert!(!engine.should_print(&test_entry()));
     }
@@ -564,7 +517,7 @@ mod tests {
     #[test]
     fn test_jq_returns_zero_is_truthy() {
         let engine = FilterEngine::build(
-            vec![], &[], &["0".into()], false,
+            vec![], &["0".into()],
         ).unwrap().unwrap();
         assert!(engine.should_print(&test_entry()));
     }
@@ -572,7 +525,7 @@ mod tests {
     #[test]
     fn test_jq_returns_empty_string_is_truthy() {
         let engine = FilterEngine::build(
-            vec![], &[], &[r#""""#.into()], false,
+            vec![], &[r#""""#.into()],
         ).unwrap().unwrap();
         assert!(engine.should_print(&test_entry()));
     }
@@ -580,7 +533,7 @@ mod tests {
     #[test]
     fn test_jq_syntax_error() {
         let result = FilterEngine::build(
-            vec![], &[], &["invalid[[[".into()], false,
+            vec![], &["invalid[[[".into()],
         );
         assert!(result.is_err());
     }
@@ -594,14 +547,14 @@ mod tests {
             action: "show".into(),
             rule: vec![
                 Rule {
-                    name: None, negate: false,
+                    negate: false,
                     condition: vec![Condition {
                         path: "message.message_type".into(),
                         op: Op::Eq, value: json!("response"),
                     }],
                 },
                 Rule {
-                    name: None, negate: false,
+                    negate: false,
                     condition: vec![Condition {
                         path: "message.message_type".into(),
                         op: Op::Eq, value: json!("query"), // won't match
@@ -610,7 +563,7 @@ mod tests {
             ],
             chain: vec![],
         };
-        let engine = FilterEngine::build(vec![cfg], &[], &[], false).unwrap().unwrap();
+        let engine = FilterEngine::build(vec![cfg], &[]).unwrap().unwrap();
         assert!(!engine.should_print(&test_entry()));
     }
 
@@ -621,14 +574,14 @@ mod tests {
             action: "show".into(),
             rule: vec![
                 Rule {
-                    name: None, negate: false,
+                    negate: false,
                     condition: vec![Condition {
                         path: "message.message_type".into(),
                         op: Op::Eq, value: json!("response"),
                     }],
                 },
                 Rule {
-                    name: None, negate: false,
+                    negate: false,
                     condition: vec![Condition {
                         path: "message.authoritative".into(),
                         op: Op::Eq, value: json!(true),
@@ -637,7 +590,7 @@ mod tests {
             ],
             chain: vec![],
         };
-        let engine = FilterEngine::build(vec![cfg], &[], &[], false).unwrap().unwrap();
+        let engine = FilterEngine::build(vec![cfg], &[]).unwrap().unwrap();
         assert!(engine.should_print(&test_entry()));
     }
 
@@ -648,14 +601,14 @@ mod tests {
             action: "show".into(),
             rule: vec![
                 Rule {
-                    name: None, negate: false,
+                    negate: false,
                     condition: vec![Condition {
                         path: "message.message_type".into(),
                         op: Op::Eq, value: json!("query"),
                     }],
                 },
                 Rule {
-                    name: None, negate: false,
+                    negate: false,
                     condition: vec![Condition {
                         path: "interface".into(),
                         op: Op::Eq, value: json!("nonexistent"),
@@ -664,7 +617,7 @@ mod tests {
             ],
             chain: vec![],
         };
-        let engine = FilterEngine::build(vec![cfg], &[], &[], false).unwrap().unwrap();
+        let engine = FilterEngine::build(vec![cfg], &[]).unwrap().unwrap();
         assert!(!engine.should_print(&test_entry()));
     }
 
@@ -675,10 +628,10 @@ mod tests {
         let cfg = FilterConfig {
             mode: "any".into(),
             action: "show".into(),
-            rule: vec![Rule { name: None, negate: false, condition: vec![] }],
+            rule: vec![Rule { negate: false, condition: vec![] }],
             chain: vec![],
         };
-        let engine = FilterEngine::build(vec![cfg], &[], &[], false).unwrap().unwrap();
+        let engine = FilterEngine::build(vec![cfg], &[]).unwrap().unwrap();
         assert!(engine.should_print(&test_entry()));
     }
 
@@ -688,7 +641,7 @@ mod tests {
             mode: "any".into(),
             action: "show".into(),
             rule: vec![Rule {
-                name: None, negate: true,
+                negate: true,
                 condition: vec![Condition {
                     path: "message.message_type".into(),
                     op: Op::Eq, value: json!("response"),
@@ -696,7 +649,7 @@ mod tests {
             }],
             chain: vec![],
         };
-        let engine = FilterEngine::build(vec![cfg], &[], &[], false).unwrap().unwrap();
+        let engine = FilterEngine::build(vec![cfg], &[]).unwrap().unwrap();
         // Conditions match, but negate inverts → rule doesn't match → not printed
         assert!(!engine.should_print(&test_entry()));
     }
@@ -705,29 +658,26 @@ mod tests {
 
     #[test]
     fn test_exists_true_on_missing_field() {
-        let engine = FilterEngine::build(
-            vec![], &["nonexistent.field exists true".into()], &[], false,
-        ).unwrap().unwrap();
+        let cfg = make_filter("nonexistent.field", Op::Exists, json!(true));
+        let engine = FilterEngine::build(vec![cfg], &[]).unwrap().unwrap();
         assert!(!engine.should_print(&test_entry()));
     }
 
     #[test]
     fn test_exists_false_on_missing_field() {
-        let engine = FilterEngine::build(
-            vec![], &["nonexistent.field exists false".into()], &[], false,
-        ).unwrap().unwrap();
+        let cfg = make_filter("nonexistent.field", Op::Exists, json!(false));
+        let engine = FilterEngine::build(vec![cfg], &[]).unwrap().unwrap();
         assert!(engine.should_print(&test_entry()));
     }
 
     // --- Mixed inline + jq ---
 
     #[test]
-    fn test_inline_passes_jq_fails() {
+    fn test_config_passes_jq_fails() {
+        let cfg = make_filter("message.message_type", Op::Eq, json!("response"));
         let engine = FilterEngine::build(
-            vec![],
-            &["message.message_type eq response".into()],
+            vec![cfg],
             &["false".into()],
-            false,
         ).unwrap().unwrap();
         assert!(!engine.should_print(&test_entry()));
     }
@@ -743,7 +693,7 @@ mod tests {
             chain: vec![],
         };
         // Config with no rules → chain link passes everything
-        let engine = FilterEngine::build(vec![cfg], &[], &[], false).unwrap().unwrap();
+        let engine = FilterEngine::build(vec![cfg], &[]).unwrap().unwrap();
         assert!(engine.should_print(&test_entry()));
     }
 
@@ -755,7 +705,7 @@ mod tests {
             mode: "any".into(),
             action: "hide".into(),
             rule: vec![Rule {
-                name: None, negate: false,
+                negate: false,
                 condition: vec![Condition {
                     path: "message.message_type".into(),
                     op: Op::Eq, value: json!("response"),
@@ -763,7 +713,7 @@ mod tests {
             }],
             chain: vec![],
         };
-        let engine = FilterEngine::build(vec![cfg], &[], &[], false).unwrap().unwrap();
+        let engine = FilterEngine::build(vec![cfg], &[]).unwrap().unwrap();
         // Matches → hide → should NOT print
         assert!(!engine.should_print(&test_entry()));
     }
@@ -774,7 +724,7 @@ mod tests {
             mode: "any".into(),
             action: "hide".into(),
             rule: vec![Rule {
-                name: None, negate: false,
+                negate: false,
                 condition: vec![Condition {
                     path: "message.message_type".into(),
                     op: Op::Eq, value: json!("query"),
@@ -782,7 +732,7 @@ mod tests {
             }],
             chain: vec![],
         };
-        let engine = FilterEngine::build(vec![cfg], &[], &[], false).unwrap().unwrap();
+        let engine = FilterEngine::build(vec![cfg], &[]).unwrap().unwrap();
         // Doesn't match → not hidden → SHOULD print
         assert!(engine.should_print(&test_entry()));
     }
@@ -864,5 +814,158 @@ mod tests {
     fn test_load_configs_empty_list() {
         let configs = load_configs(&[]).unwrap();
         assert!(configs.is_empty());
+    }
+
+    // --- Mode/action validation and defaults ---
+
+    #[test]
+    fn test_mode_default_any_when_omitted() {
+        // serde default fills "any" — verify FilterEngine accepts it
+        let cfg = FilterConfig {
+            mode: "any".into(),
+            action: "show".into(),
+            rule: vec![Rule {
+                negate: false,
+                condition: vec![Condition {
+                    path: "message.message_type".into(),
+                    op: Op::Eq,
+                    value: json!("response"),
+                }],
+            }],
+            chain: vec![],
+        };
+        let engine = FilterEngine::build(vec![cfg], &[]).unwrap().unwrap();
+        assert!(engine.should_print(&test_entry()));
+    }
+
+    #[test]
+    fn test_mode_empty_string_defaults_to_any() {
+        let cfg = FilterConfig {
+            mode: "".into(),
+            action: "show".into(),
+            rule: vec![Rule {
+                negate: false,
+                condition: vec![Condition {
+                    path: "message.message_type".into(),
+                    op: Op::Eq,
+                    value: json!("response"),
+                }],
+            }],
+            chain: vec![],
+        };
+        // Should not error — empty mode defaults to any
+        let engine = FilterEngine::build(vec![cfg], &[]).unwrap().unwrap();
+        assert!(engine.should_print(&test_entry()));
+    }
+
+    #[test]
+    fn test_mode_invalid_value_rejected() {
+        let cfg = FilterConfig {
+            mode: "anyyy".into(),
+            action: "show".into(),
+            rule: vec![Rule {
+                negate: false,
+                condition: vec![Condition {
+                    path: "message.message_type".into(),
+                    op: Op::Eq,
+                    value: json!("response"),
+                }],
+            }],
+            chain: vec![],
+        };
+        let result = FilterEngine::build(vec![cfg], &[]);
+        let err = result.err().expect("should fail on invalid mode");
+        assert!(err.to_string().contains("Unknown filter mode"));
+    }
+
+    #[test]
+    fn test_action_empty_string_defaults_to_show() {
+        let cfg = FilterConfig {
+            mode: "any".into(),
+            action: "".into(),
+            rule: vec![Rule {
+                negate: false,
+                condition: vec![Condition {
+                    path: "message.message_type".into(),
+                    op: Op::Eq,
+                    value: json!("response"),
+                }],
+            }],
+            chain: vec![],
+        };
+        // Should not error — empty action defaults to show
+        let engine = FilterEngine::build(vec![cfg], &[]).unwrap().unwrap();
+        assert!(engine.should_print(&test_entry()));
+    }
+
+    #[test]
+    fn test_action_invalid_value_rejected() {
+        let cfg = FilterConfig {
+            mode: "any".into(),
+            action: "block".into(),
+            rule: vec![Rule {
+                negate: false,
+                condition: vec![Condition {
+                    path: "message.message_type".into(),
+                    op: Op::Eq,
+                    value: json!("response"),
+                }],
+            }],
+            chain: vec![],
+        };
+        let result = FilterEngine::build(vec![cfg], &[]);
+        let err = result.err().expect("should fail on invalid action");
+        assert!(err.to_string().contains("Unknown filter action"));
+    }
+
+    #[test]
+    fn test_mode_and_action_from_toml_defaults() {
+        // Simulate what serde does: when mode/action are omitted in TOML,
+        // serde fills "any"/"show" via default functions
+        let toml_str = r#"
+            [[rule]]
+            [[rule.condition]]
+            path = "message.message_type"
+            op = "eq"
+            value = "response"
+        "#;
+        let cfg: FilterConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.mode, "any");
+        assert_eq!(cfg.action, "show");
+        let engine = FilterEngine::build(vec![cfg], &[]).unwrap().unwrap();
+        assert!(engine.should_print(&test_entry()));
+    }
+
+    #[test]
+    fn test_mode_all_explicit_in_toml() {
+        let toml_str = r#"
+            mode = "all"
+            [[rule]]
+            [[rule.condition]]
+            path = "message.message_type"
+            op = "eq"
+            value = "response"
+        "#;
+        let cfg: FilterConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.mode, "all");
+        let engine = FilterEngine::build(vec![cfg], &[]).unwrap().unwrap();
+        assert!(engine.should_print(&test_entry()));
+    }
+
+    #[test]
+    fn test_action_hide_explicit_in_toml() {
+        let toml_str = r#"
+            action = "hide"
+            [[rule]]
+            [[rule.condition]]
+            path = "message.message_type"
+            op = "eq"
+            value = "response"
+        "#;
+        let cfg: FilterConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.action, "hide");
+        let engine = FilterEngine::build(vec![cfg], &[]).unwrap().unwrap();
+        // response matches hide rule → should NOT print
+        assert!(!engine.should_print(&test_entry()));
     }
 }

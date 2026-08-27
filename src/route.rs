@@ -154,7 +154,6 @@ fn build_route_filter(rfc: &RouteFilterConfig) -> Result<Option<FilterEngine>> {
             .rule
             .iter()
             .map(|r| filter::Rule {
-                name: r.name.clone(),
                 negate: r.negate,
                 condition: r
                     .condition
@@ -175,7 +174,7 @@ fn build_route_filter(rfc: &RouteFilterConfig) -> Result<Option<FilterEngine>> {
         all_configs.push(inline_config);
     }
 
-    FilterEngine::build(all_configs, &[], &rfc.jq, false)
+    FilterEngine::build(all_configs, &rfc.jq)
 }
 
 #[cfg(test)]
@@ -317,12 +316,30 @@ mod tests {
 
     // --- Filter rejection ---
 
+    fn eq_filter(path: &str, value: &str) -> Option<FilterEngine> {
+        use crate::filter::{FilterConfig, Rule, Condition};
+        FilterEngine::build(
+            vec![FilterConfig {
+                mode: "any".into(),
+                action: "show".into(),
+                rule: vec![Rule {
+                    negate: false,
+                    condition: vec![Condition {
+                        path: path.into(),
+                        op: crate::filter::ops::Op::Eq,
+                        value: serde_json::json!(value),
+                    }],
+                }],
+                chain: vec![],
+            }],
+            &[],
+        ).unwrap()
+    }
+
     #[test]
     fn test_route_filter_rejects() {
         let (output, captured) = CaptureOutput::new();
-        let filter = FilterEngine::build(
-            vec![], &["message.message_type eq response".into()], &[], false,
-        ).unwrap();
+        let filter = eq_filter("message.message_type", "response");
         let route = build_test_route(
             "test", vec!["eth0".into()],
             filter, TransformChain::new(vec![]),
@@ -337,9 +354,7 @@ mod tests {
     #[test]
     fn test_route_filter_passes() {
         let (output, captured) = CaptureOutput::new();
-        let filter = FilterEngine::build(
-            vec![], &["message.message_type eq query".into()], &[], false,
-        ).unwrap();
+        let filter = eq_filter("message.message_type", "query");
         let route = build_test_route(
             "test", vec!["eth0".into()],
             filter, TransformChain::new(vec![]),
@@ -502,7 +517,7 @@ mod tests {
             input: vec!["eth0".into()],
             filter: None,
             transform: vec![],
-            output: vec![OutputConfig::Log { format: "json".into() }],
+            output: vec![OutputConfig::Log {}],
         };
         let route = Route::build(&config).unwrap();
         assert_eq!(route.name, "test");
@@ -521,7 +536,6 @@ mod tests {
             action: "show".into(),
             jq: vec![],
             rule: vec![RouteFilterRule {
-                name: None,
                 negate: false,
                 condition: vec![RouteFilterCondition {
                     path: "message.message_type".into(),

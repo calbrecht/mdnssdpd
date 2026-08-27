@@ -15,7 +15,7 @@ This is a NixOS-based project. The developer uses NixOS.
 nix build
 # or: nix-shell --run "cargo build"
 
-# Unit tests (28 tests)
+# Unit tests
 nix-shell --run "cargo test"
 
 # NixOS VM integration tests (3 VMs, 2 VLANs, 8 subtests, ~30s)
@@ -142,7 +142,7 @@ services.mdnssdpd
        └── outputs: [outputModule]
             ├── type: "reflect" | "log"
             ├── reflect: null | { interfaces }
-            └── log: null | { format }
+            └── log: null | {}
 ```
 
 The module generates TOML via `pkgs.formats.toml {}`. Route attribute names become route names. Assertions validate that tagged-union fields have matching sub-options (e.g., `type = "reflect"` requires `reflect` to be set).
@@ -152,7 +152,7 @@ The VM tests use this structured config — **not** raw TOML strings — which v
 ## What's Not Yet Implemented
 
 - IPv6 multicast send (`MdnsSender::new_v6`)
-- `rewrite_ip` transform (CIDR-based address rewriting; `ipnet` crate is already a dependency)
+- `rewrite_ip` transform (CIDR-based address rewriting)
 - `strip_txt_keys` transform
 - jq-based transform (mutate message via jaq expression)
 - Graceful shutdown / signal handling
